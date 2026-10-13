@@ -75,10 +75,10 @@ Site _site(String id, _FakeSite provider) =>
 
 void _selectQuality(_Controller controller) {
   controller.detail.value = _detail(controller.roomId);
-  controller.qualites.assignAll([
+  controller.qualites.value = [
     LivePlayQuality(quality: 'high', data: 1),
     LivePlayQuality(quality: 'low', data: 2),
-  ]);
+  ];
   controller.currentQuality = 0;
 }
 

@@ -439,7 +439,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     if (playerClosing ||
         detail.value == null ||
         currentQuality < 0 ||
-        currentQuality >= qualites.length) return;
+        currentQuality >= qualites.length) {
+      return;
+    }
     final room = _roomGeneration;
     final playback = ++_playGeneration;
     _pendingRetryGeneration = null;
@@ -479,7 +481,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     if (playerClosing ||
         !_playlistReady ||
         index < 0 ||
-        index >= playUrls.length) return;
+        index >= playUrls.length) {
+      return;
+    }
     // Invalidate any delayed retry for the previous selection.
     _playGeneration++;
     _pendingRetryGeneration = null;
@@ -524,7 +528,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     if (!_playlistReady ||
         !_isCurrentPlayback(room, playback) ||
         index < 0 ||
-        index >= playUrls.length) return;
+        index >= playUrls.length) {
+      return;
+    }
     currentLineInfo.value = "线路${index + 1}";
     errorMsg.value = "";
     try {
@@ -558,7 +564,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     if (playerClosing ||
         !_playlistReady ||
         currentLineIndex < 0 ||
-        currentLineIndex >= playUrls.length) return;
+        currentLineIndex >= playUrls.length) {
+      return;
+    }
     if (_retryGeneration == _playGeneration) {
       // Coalesce terminal events emitted during an in-flight retry.
       _pendingRetryGeneration = _playGeneration;
@@ -1113,7 +1121,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 错误信息：
 ${error?.toString()}
 ----------------
-${errorStack}''');
+$errorStack''');
     SmartDialog.showToast("已复制错误信息");
   }
 

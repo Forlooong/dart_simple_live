@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:auto_orientation_v2/auto_orientation_v2.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:file_picker/file_picker.dart';
