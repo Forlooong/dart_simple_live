@@ -19,7 +19,10 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-15
+    env:
+      # connectivity_plus uses APIs introduced in the Apple 26 SDKs.
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     timeout-minutes: 60
     defaults:
       run:
