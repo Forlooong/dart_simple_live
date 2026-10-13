@@ -1,4 +1,4 @@
-name: Fork Android release APK
+name: app-build-action-android
 
 on:
   push:
