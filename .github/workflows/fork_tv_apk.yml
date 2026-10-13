@@ -1,0 +1,160 @@
+name: app-build-action-tv
+run-name: Release TV 1.6.5
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - 'simple_live_tv_app/**'
+      - 'simple_live_core/**'
+      - '.github/workflows/fork_tv_apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-tv-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tv-apk:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: simple_live_tv_app
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.38.10'
+          channel: stable
+          cache: true
+      - name: Prepare readable build names
+        id: metadata
+        run: |
+          version="$(sed -n 's/^version: *\([^+ ]*\).*$/\1/p' pubspec.yaml)"
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "short-sha=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore packages
+        run: flutter pub get --enforce-lockfile
+
+      - name: Configure APK signing
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.TV_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.TV_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.TV_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.TV_KEY_ALIAS }}
+        run: |
+          python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          names = ('KEYSTORE_BASE64', 'STORE_PASSWORD', 'KEY_PASSWORD', 'KEY_ALIAS')
+          present = [bool(os.environ.get(name)) for name in names]
+          if any(present) and not all(present):
+              raise SystemExit('Release signing secrets are incomplete; refusing to fall back silently.')
+
+          if all(present):
+              os.umask(0o077)
+              keystore = Path(os.environ['RUNNER_TEMP']) / 'simple-live-tv-release.jks'
+              try:
+                  keystore.write_bytes(base64.b64decode(
+                      ''.join(os.environ['KEYSTORE_BASE64'].split()), validate=True))
+              except ValueError:
+                  raise SystemExit('KEYSTORE_BASE64 is not valid base64.') from None
+
+              # Java Properties accepts Unicode escapes. Encode every UTF-16 unit
+              # so spaces, backslashes and punctuation in secrets remain literal.
+              def escape(value):
+                  raw = value.encode('utf-16-be')
+                  return ''.join('\\u%04x' % int.from_bytes(raw[i:i+2], 'big')
+                                 for i in range(0, len(raw), 2))
+
+              properties = {
+                  'storeFile': str(keystore),
+                  'storePassword': os.environ['STORE_PASSWORD'],
+                  'keyPassword': os.environ['KEY_PASSWORD'],
+                  'keyAlias': os.environ['KEY_ALIAS'],
+              }
+              Path('android/key.properties').write_text(''.join(
+                  key + '=' + escape(value) + '\n' for key, value in properties.items()))
+              mode = 'release-signed'
+          else:
+              # Intentional fork-only fallback: optimized release APK, test key.
+              with open(os.environ['GITHUB_ENV'], 'a') as output:
+                  output.write('ORG_GRADLE_PROJECT_allowDebugReleaseSigning=true\n')
+              mode = 'debug-signed-test-only'
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('mode=' + mode + '\n')
+              output.write('label=' + ('ReleaseSigned' if mode == 'release-signed' else 'TestSigned') + '\n')
+          PY
+
+      - name: Build release APKs
+        run: flutter build apk --release --split-per-abi --no-pub
+
+      - name: Verify APK signatures and prepare artifacts
+        env:
+          SIGNING_MODE: ${{ steps.signing.outputs.mode }}
+          SIGNING_LABEL: ${{ steps.signing.outputs.label }}
+          APP_VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          apksigner="$(find "$sdk_root/build-tools" -name apksigner -type f | sort -V | tail -n 1)"
+          test -n "$apksigner"
+          mkdir -p build/apk-artifacts
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            apk="build/app/outputs/flutter-apk/app-${abi}-release.apk"
+            test -s "$apk"
+            "$apksigner" verify --print-certs "$apk" > "build/apk-artifacts/${abi}-SIGNING-CERT.txt"
+            case "$abi" in
+              arm64-v8a) arch=arm64 ;;
+              armeabi-v7a) arch=arm32 ;;
+              x86_64) arch=x64 ;;
+            esac
+            cp "$apk" "build/apk-artifacts/Simple-Live-${APP_VERSION}-Android-TV-${arch}-${SIGNING_LABEL}.apk"
+          done
+          cp pubspec.lock build/apk-artifacts/pubspec.lock
+          flutter --version > build/apk-artifacts/FLUTTER-VERSION.txt
+          cd build/apk-artifacts
+          sha256sum *.apk > SHA256SUMS.txt
+          printf '%s\n' \
+            "Commit: $GITHUB_SHA" \
+            "Signing: $SIGNING_MODE" \
+            'Build mode: release' \
+            'Package: com.xycz.simple_live_tv' \
+            'Android TV: choose arm64, arm32 or x64 to match the device CPU and OS.' \
+            'A debug-signed APK cannot update an app signed with another key.' \
+            'Export settings before uninstalling any existing app; uninstalling deletes its local data.' \
+            'Debug signing keys on fresh CI runners can change between runs.' \
+            > BUILD-INFO.txt
+          cat FLUTTER-VERSION.txt >> BUILD-INFO.txt
+          printf '%s\n' "Android TV $APP_VERSION · arm32 / arm64 / x64 · $SIGNING_LABEL" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload installable APKs
+        uses: actions/upload-artifact@v7
+        with:
+          name: Simple-Live-${{ steps.metadata.outputs.version }}-Android-TV-Release-${{ steps.signing.outputs.label }}-${{ steps.metadata.outputs.short-sha }}
+          path: simple_live_tv_app/build/apk-artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove temporary release signing files
+        if: always()
+        run: |
+          rm -f android/key.properties "$RUNNER_TEMP/simple-live-tv-release.jks"

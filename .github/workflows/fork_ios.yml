@@ -1,0 +1,66 @@
+name: app-build-action-ios
+run-name: Release iOS 1.11.4
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'simple_live_app/**'
+      - 'simple_live_core/**'
+      - '.github/workflows/fork_ios.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: simple_live_app
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.38.10'
+          channel: stable
+          cache: true
+      - name: Read package version
+        id: metadata
+        run: |
+          version="$(sed -n 's/^version: *\([^+ ]*\).*$/\1/p' pubspec.yaml)"
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "short-sha=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+      - name: Restore locked packages
+        run: flutter pub get --enforce-lockfile
+      - name: Build unsigned iOS app
+        run: flutter build ios --release --no-codesign --no-pub
+      - name: Package unsigned IPA
+        env:
+          APP_VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          test -d build/ios/iphoneos/Runner.app
+          mkdir -p build/ipa/Payload build/artifacts
+          ditto build/ios/iphoneos/Runner.app build/ipa/Payload/Runner.app
+          (cd build/ipa && zip -qry "../artifacts/Simple-Live-${APP_VERSION}-iOS-arm64-Unsigned.ipa" Payload)
+          unzip -t build/artifacts/*.ipa
+          (cd build/artifacts && shasum -a 256 *.ipa > SHA256SUMS.txt)
+          printf '%s\n' "iOS $APP_VERSION · arm64 · unsigned IPA" 'Requires signing with an Apple development/distribution identity before installation.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload iOS package
+        uses: actions/upload-artifact@v7
+        with:
+          name: Simple-Live-${{ steps.metadata.outputs.version }}-iOS-arm64-Unsigned-${{ steps.metadata.outputs.short-sha }}
+          path: simple_live_app/build/artifacts/
+          if-no-files-found: error
+          retention-days: 14

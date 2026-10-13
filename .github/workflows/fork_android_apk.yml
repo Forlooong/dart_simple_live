@@ -23,10 +23,10 @@ jobs:
         working-directory: simple_live_app
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
@@ -148,21 +148,37 @@ jobs:
             "Signing: $SIGNING_MODE" \
             'Build mode: release' \
             'Package: com.xycz.simple_live' \
-            'Samsung Galaxy S20+: choose the Android-arm64 APK.' \
             'A debug-signed APK cannot update an app signed with another key.' \
             'Export settings before uninstalling any existing app; uninstalling deletes its local data.' \
             'Debug signing keys on fresh CI runners can change between runs.' \
             > BUILD-INFO.txt
           cat FLUTTER-VERSION.txt >> BUILD-INFO.txt
-          cat BUILD-INFO.txt >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload installable APKs
-        uses: actions/upload-artifact@v4
+        id: upload
+        uses: actions/upload-artifact@v7
         with:
           name: Simple-Live-${{ steps.metadata.outputs.version }}-Android-Release-${{ steps.signing.outputs.label }}-${{ steps.metadata.outputs.short-sha }}
           path: simple_live_app/build/apk-artifacts/
           if-no-files-found: error
           retention-days: 14
+
+      - name: Summarize Android download
+        env:
+          APP_VERSION: ${{ steps.metadata.outputs.version }}
+          SIGNING_LABEL: ${{ steps.signing.outputs.label }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          {
+            printf '## Simple Live %s · Android\n\n' "$APP_VERSION"
+            printf '[Download all APKs](%s) (%s). Sign in to GitHub, download and unzip the artifact, then install one APK matching your device.\n\n' "$ARTIFACT_URL" "$SIGNING_LABEL"
+            printf '%s\n' \
+              '- arm64: 64-bit ARM devices (arm64-v8a).' \
+              '- arm32: 32-bit ARM devices (armeabi-v7a).' \
+              '- x64: 64-bit Intel/AMD devices or emulators (x86_64).' \
+              '' \
+              'TestSigned builds use a test key that may change between runs. Updating an installed app requires the same signing key; back up or export settings before uninstalling, because uninstalling removes local data.'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Remove temporary release signing files
         if: always()

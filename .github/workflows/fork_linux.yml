@@ -1,0 +1,70 @@
+name: app-build-action-linux
+run-name: Release Linux 1.11.4
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'simple_live_app/**'
+      - 'simple_live_core/**'
+      - '.github/workflows/fork_linux.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: simple_live_app
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.38.10'
+          channel: stable
+          cache: true
+      - name: Read package version
+        id: metadata
+        run: |
+          version="$(sed -n 's/^version: *\([^+ ]*\).*$/\1/p' pubspec.yaml)"
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "short-sha=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+      - name: Restore locked packages
+        run: flutter pub get --enforce-lockfile
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libasound2-dev libmpv-dev mpv
+      - name: Build Linux release
+        run: flutter build linux --release --no-pub
+      - name: Package Linux bundle
+        env:
+          APP_VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          bundle=build/linux/x64/release/bundle
+          test -x "$bundle/simple_live_app"
+          mkdir -p build/artifacts
+          tar -czf "build/artifacts/Simple-Live-${APP_VERSION}-Linux-x64.tar.gz" -C "$bundle" .
+          tar -tzf build/artifacts/*.tar.gz > /dev/null
+          (cd build/artifacts && sha256sum *.tar.gz > SHA256SUMS.txt)
+          printf '%s\n' "Linux $APP_VERSION · x64 · release tar.gz" 'Extract the full bundle. Requires GTK 3 and libmpv runtime libraries (Ubuntu 22.04 or compatible).' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload Linux package
+        uses: actions/upload-artifact@v7
+        with:
+          name: Simple-Live-${{ steps.metadata.outputs.version }}-Linux-x64-Release-${{ steps.metadata.outputs.short-sha }}
+          path: simple_live_app/build/artifacts/
+          if-no-files-found: error
+          retention-days: 14

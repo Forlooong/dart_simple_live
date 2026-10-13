@@ -1,0 +1,75 @@
+name: app-build-action-macos
+run-name: Release macOS 1.11.4
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'simple_live_app/**'
+      - 'simple_live_core/**'
+      - '.github/workflows/fork_macos.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: simple_live_app
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.38.10'
+          channel: stable
+          cache: true
+      - name: Read package version
+        id: metadata
+        run: |
+          version="$(sed -n 's/^version: *\([^+ ]*\).*$/\1/p' pubspec.yaml)"
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "short-sha=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+      - name: Restore locked packages
+        run: flutter pub get --enforce-lockfile
+      - name: Configure macOS release
+        run: flutter build macos --release --no-pub --config-only
+      - name: Build unsigned universal macOS app
+        run: |
+          xcodebuild -workspace macos/Runner.xcworkspace -scheme Runner \
+            -configuration Release -derivedDataPath "$PWD/build/macos" \
+            -destination 'generic/platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= \
+            ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO -quiet
+      - name: Package macOS app
+        env:
+          APP_VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          app='build/macos/Build/Products/Release/Simple Live.app'
+          test -d "$app"
+          lipo -verify_arch arm64 x86_64 "$app/Contents/MacOS/Simple Live"
+          mkdir -p build/artifacts
+          ditto -c -k --sequesterRsrc --keepParent "$app" "build/artifacts/Simple-Live-${APP_VERSION}-macOS-universal-Unsigned.zip"
+          unzip -t build/artifacts/*.zip
+          (cd build/artifacts && shasum -a 256 *.zip > SHA256SUMS.txt)
+          printf '%s\n' "macOS $APP_VERSION · arm64 + x64 · unsigned ZIP" 'Not notarized; macOS may prevent opening this build.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload macOS package
+        uses: actions/upload-artifact@v7
+        with:
+          name: Simple-Live-${{ steps.metadata.outputs.version }}-macOS-universal-Unsigned-${{ steps.metadata.outputs.short-sha }}
+          path: simple_live_app/build/artifacts/
+          if-no-files-found: error
+          retention-days: 14

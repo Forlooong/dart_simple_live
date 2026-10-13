@@ -1,0 +1,74 @@
+name: app-build-action-windows
+run-name: Release Windows 1.11.4
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'simple_live_app/**'
+      - 'simple_live_core/**'
+      - '.github/workflows/fork_windows.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: simple_live_app
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.38.10'
+          channel: stable
+          cache: true
+      - name: Read package version
+        id: metadata
+        run: |
+          version="$(sed -n 's/^version: *\([^+ ]*\).*$/\1/p' pubspec.yaml)"
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "short-sha=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+      - name: Restore locked packages
+        run: flutter pub get --enforce-lockfile
+      - name: Build Windows release
+        run: flutter build windows --release --no-pub
+      - name: Package portable Windows app
+        shell: pwsh
+        env:
+          APP_VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundle = 'build/windows/x64/runner/Release'
+          if (!(Test-Path "$bundle/simple_live_app.exe")) { throw 'Windows executable is missing' }
+          New-Item -ItemType Directory -Force build/artifacts | Out-Null
+          $archive = "build/artifacts/Simple-Live-$env:APP_VERSION-Windows-x64-Unsigned.zip"
+          Compress-Archive -Path "$bundle/*" -DestinationPath $archive
+          $hash = Get-FileHash $archive -Algorithm SHA256
+          "$($hash.Hash.ToLower())  $([IO.Path]::GetFileName($archive))" | Set-Content build/artifacts/SHA256SUMS.txt
+          @(
+            "Commit: $env:GITHUB_SHA"
+            'Unsigned portable Windows x64 build. Extract the entire archive before running.'
+            'Requires Microsoft Visual C++ 2015-2022 Redistributable (x64).'
+            'https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist'
+          ) | Set-Content build/artifacts/BUILD-INFO.txt
+          "Windows $env:APP_VERSION · x64 · unsigned portable ZIP. Extract fully; requires Microsoft Visual C++ x64 runtime." >> $env:GITHUB_STEP_SUMMARY
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v7
+        with:
+          name: Simple-Live-${{ steps.metadata.outputs.version }}-Windows-x64-Unsigned-${{ steps.metadata.outputs.short-sha }}
+          path: simple_live_app/build/artifacts/
+          if-no-files-found: error
+          retention-days: 14
