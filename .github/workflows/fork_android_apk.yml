@@ -46,14 +46,6 @@ jobs:
       - name: Restore packages
         run: flutter pub get --enforce-lockfile
 
-      - name: Preserve resolved dependency snapshot
-        uses: actions/upload-artifact@v4
-        with:
-          name: Simple-Live-${{ steps.metadata.outputs.version }}-Dependencies-${{ steps.metadata.outputs.short-sha }}
-          path: simple_live_app/pubspec.lock
-          if-no-files-found: error
-          retention-days: 14
-
       - name: Check player lifecycle code
         run: |
           flutter analyze --no-pub --no-fatal-infos \
@@ -163,25 +155,12 @@ jobs:
             > BUILD-INFO.txt
           cat FLUTTER-VERSION.txt >> BUILD-INFO.txt
           cat BUILD-INFO.txt >> "$GITHUB_STEP_SUMMARY"
-          mkdir -p ../apk-arm64
-          cp "Simple-Live-${APP_VERSION}-Android-arm64-${SIGNING_LABEL}.apk" \
-            arm64-v8a-SIGNING-CERT.txt BUILD-INFO.txt FLUTTER-VERSION.txt pubspec.lock ../apk-arm64/
-          cd ../apk-arm64
-          sha256sum *.apk > SHA256SUMS.txt
 
       - name: Upload installable APKs
         uses: actions/upload-artifact@v4
         with:
           name: Simple-Live-${{ steps.metadata.outputs.version }}-Android-Release-${{ steps.signing.outputs.label }}-${{ steps.metadata.outputs.short-sha }}
           path: simple_live_app/build/apk-artifacts/
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload ARM64 APK for phones
-        uses: actions/upload-artifact@v4
-        with:
-          name: Simple-Live-${{ steps.metadata.outputs.version }}-Android-arm64-${{ steps.signing.outputs.label }}-${{ steps.metadata.outputs.short-sha }}
-          path: simple_live_app/build/apk-arm64/
           if-no-files-found: error
           retention-days: 14
 
