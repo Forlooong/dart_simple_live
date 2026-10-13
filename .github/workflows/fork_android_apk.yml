@@ -1,5 +1,5 @@
 name: app-build-action-android
-run-name: "Release Android · build #${{ github.run_number }}.${{ github.run_attempt }} · ${{ github.ref_name }}"
+run-name: "Release Android · 1.1.2"
 
 on:
   push:
@@ -40,14 +40,21 @@ jobs:
         run: |
           set -euo pipefail
           version="$(sed -n 's/^version: *\([^ ]*\).*$/\1/p' pubspec.yaml | tr -d '\r')"
-          test -n "$version"
-          short_sha="${GITHUB_SHA:0:7}"
-          build_suffix="build.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}-${short_sha}"
+          package_version="$version"
+          [[ "$package_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+$ ]]
+          version="${package_version%%+*}"
+          # GitHub evaluates run-name before checkout. Fail if a version bump
+          # forgot to update this workflow's static, version-only title.
+          expected_title="Release Android · $version"
+          actual_title="$(sed -n 's/^run-name: "\(.*\)"$/\1/p' ../.github/workflows/fork_android_apk.yml)"
+          if [[ "$actual_title" != "$expected_title" ]]; then
+            echo "::error::Update run-name to $expected_title to match pubspec.yaml"
+            exit 1
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "build-suffix=$build_suffix" >> "$GITHUB_OUTPUT"
           {
             printf '## Build identity\n\n'
-            printf -- '- Package version: `%s`\n' "$version"
+            printf -- '- Package version: `%s`\n' "$package_version"
             printf -- '- CI build: `%s.%s`\n' "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_ATTEMPT"
             printf -- '- Commit: `%s`\n\n' "$GITHUB_SHA"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -144,7 +151,6 @@ jobs:
           SIGNING_MODE: ${{ steps.signing.outputs.mode }}
           SIGNING_LABEL: ${{ steps.signing.outputs.label }}
           APP_VERSION: ${{ steps.metadata.outputs.version }}
-          BUILD_SUFFIX: ${{ steps.metadata.outputs.build-suffix }}
         run: |
           set -euo pipefail
           sdk_root="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
@@ -160,7 +166,7 @@ jobs:
               armeabi-v7a) arch=arm32 ;;
               x86_64) arch=x64 ;;
             esac
-            cp "$apk" "build/apk-artifacts/Simple-Live-${APP_VERSION}-${BUILD_SUFFIX}-Android-${arch}-${SIGNING_LABEL}.apk"
+            cp "$apk" "build/apk-artifacts/Simple-Live-${APP_VERSION}-Android-${arch}-${SIGNING_LABEL}.apk"
           done
           cp pubspec.lock build/apk-artifacts/pubspec.lock
           flutter --version > build/apk-artifacts/FLUTTER-VERSION.txt
@@ -181,7 +187,7 @@ jobs:
         id: upload
         uses: actions/upload-artifact@v7
         with:
-          name: Simple-Live-${{ steps.metadata.outputs.version }}-Android-Release-${{ steps.signing.outputs.label }}-${{ steps.metadata.outputs.build-suffix }}
+          name: Simple-Live-${{ steps.metadata.outputs.version }}-Android-Release-${{ steps.signing.outputs.label }}
           path: simple_live_app/build/apk-artifacts/
           if-no-files-found: error
           retention-days: 14

@@ -1,13 +1,14 @@
 # Fork Android APK build
 
-The `Fork Android release APK` workflow builds the checked-out commit on pushes to
-`hotfix/player-lifecycle` or `hotfix/player-lifecycle-locked`, or when started with `workflow_dispatch`. It uploads
+The `app-build-action-android` workflow builds the checked-out commit on pushes to
+`master`, or when started with `workflow_dispatch`. Its run title uses the app version
+(for example, `Release Android · 1.1.2`). It uploads
 GitHub Actions artifacts only. It does not create tags or publish a GitHub Release.
 
 ## Download and install
 
 1. Open the successful workflow run in the fork's **Actions** tab.
-2. Download `simple-live-android-release-<signing-mode>-<commit>` and unzip it.
+2. Download `Simple-Live-<version>-Android-Release-<signing-label>` and unzip it.
 3. For Samsung Galaxy S20+, install the `arm64-v8a` APK. `armeabi-v7a` and `x86_64`
    builds are also included. Checksums, commit/signing details, Flutter version,
    and the resolved dependency lockfile are in the ZIP.

@@ -1,5 +1,5 @@
 name: app-build-action-windows
-run-name: "Release Windows · build #${{ github.run_number }}.${{ github.run_attempt }} · ${{ github.ref_name }}"
+run-name: "Release Windows · 1.1.2"
 
 on:
   workflow_dispatch:
@@ -39,14 +39,21 @@ jobs:
         run: |
           set -euo pipefail
           version="$(sed -n 's/^version: *\([^ ]*\).*$/\1/p' pubspec.yaml | tr -d '\r')"
-          test -n "$version"
-          short_sha="${GITHUB_SHA:0:7}"
-          build_suffix="build.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}-${short_sha}"
+          package_version="$version"
+          [[ "$package_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+$ ]]
+          version="${package_version%%+*}"
+          # GitHub evaluates run-name before checkout. Fail if a version bump
+          # forgot to update this workflow's static, version-only title.
+          expected_title="Release Windows · $version"
+          actual_title="$(sed -n 's/^run-name: "\(.*\)"$/\1/p' ../.github/workflows/fork_windows.yml)"
+          if [[ "$actual_title" != "$expected_title" ]]; then
+            echo "::error::Update run-name to $expected_title to match pubspec.yaml"
+            exit 1
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "build-suffix=$build_suffix" >> "$GITHUB_OUTPUT"
           {
             printf '## Build identity\n\n'
-            printf -- '- Package version: `%s`\n' "$version"
+            printf -- '- Package version: `%s`\n' "$package_version"
             printf -- '- CI build: `%s.%s`\n' "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_ATTEMPT"
             printf -- '- Commit: `%s`\n\n' "$GITHUB_SHA"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -58,13 +65,12 @@ jobs:
         shell: pwsh
         env:
           APP_VERSION: ${{ steps.metadata.outputs.version }}
-          BUILD_SUFFIX: ${{ steps.metadata.outputs.build-suffix }}
         run: |
           $ErrorActionPreference = 'Stop'
           $bundle = 'build/windows/x64/runner/Release'
           if (!(Test-Path "$bundle/simple_live_app.exe")) { throw 'Windows executable is missing' }
           New-Item -ItemType Directory -Force build/artifacts | Out-Null
-          $archive = "build/artifacts/Simple-Live-$env:APP_VERSION-$env:BUILD_SUFFIX-Windows-x64-Unsigned.zip"
+          $archive = "build/artifacts/Simple-Live-$env:APP_VERSION-Windows-x64-Unsigned.zip"
           Compress-Archive -Path "$bundle/*" -DestinationPath $archive
           $hash = Get-FileHash $archive -Algorithm SHA256
           "$($hash.Hash.ToLower())  $([IO.Path]::GetFileName($archive))" | Set-Content build/artifacts/SHA256SUMS.txt
@@ -78,7 +84,7 @@ jobs:
       - name: Upload Windows package
         uses: actions/upload-artifact@v7
         with:
-          name: Simple-Live-${{ steps.metadata.outputs.version }}-Windows-x64-Unsigned-${{ steps.metadata.outputs.build-suffix }}
+          name: Simple-Live-${{ steps.metadata.outputs.version }}-Windows-x64-Unsigned
           path: simple_live_app/build/artifacts/
           if-no-files-found: error
           retention-days: 14

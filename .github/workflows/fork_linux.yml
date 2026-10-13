@@ -1,5 +1,5 @@
 name: app-build-action-linux
-run-name: "Release Linux · build #${{ github.run_number }}.${{ github.run_attempt }} · ${{ github.ref_name }}"
+run-name: "Release Linux · 1.1.2"
 
 on:
   workflow_dispatch:
@@ -39,14 +39,21 @@ jobs:
         run: |
           set -euo pipefail
           version="$(sed -n 's/^version: *\([^ ]*\).*$/\1/p' pubspec.yaml | tr -d '\r')"
-          test -n "$version"
-          short_sha="${GITHUB_SHA:0:7}"
-          build_suffix="build.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}-${short_sha}"
+          package_version="$version"
+          [[ "$package_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+$ ]]
+          version="${package_version%%+*}"
+          # GitHub evaluates run-name before checkout. Fail if a version bump
+          # forgot to update this workflow's static, version-only title.
+          expected_title="Release Linux · $version"
+          actual_title="$(sed -n 's/^run-name: "\(.*\)"$/\1/p' ../.github/workflows/fork_linux.yml)"
+          if [[ "$actual_title" != "$expected_title" ]]; then
+            echo "::error::Update run-name to $expected_title to match pubspec.yaml"
+            exit 1
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "build-suffix=$build_suffix" >> "$GITHUB_OUTPUT"
           {
             printf '## Build identity\n\n'
-            printf -- '- Package version: `%s`\n' "$version"
+            printf -- '- Package version: `%s`\n' "$package_version"
             printf -- '- CI build: `%s.%s`\n' "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_ATTEMPT"
             printf -- '- Commit: `%s`\n\n' "$GITHUB_SHA"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -61,20 +68,19 @@ jobs:
       - name: Package Linux bundle
         env:
           APP_VERSION: ${{ steps.metadata.outputs.version }}
-          BUILD_SUFFIX: ${{ steps.metadata.outputs.build-suffix }}
         run: |
           set -euo pipefail
           bundle=build/linux/x64/release/bundle
           test -x "$bundle/simple_live_app"
           mkdir -p build/artifacts
-          tar -czf "build/artifacts/Simple-Live-${APP_VERSION}-${BUILD_SUFFIX}-Linux-x64.tar.gz" -C "$bundle" .
+          tar -czf "build/artifacts/Simple-Live-${APP_VERSION}-Linux-x64.tar.gz" -C "$bundle" .
           tar -tzf build/artifacts/*.tar.gz > /dev/null
           (cd build/artifacts && sha256sum *.tar.gz > SHA256SUMS.txt)
           printf '%s\n' "Linux $APP_VERSION · x64 · release tar.gz" 'Extract the full bundle. Requires GTK 3 and libmpv runtime libraries (Ubuntu 22.04 or compatible).' >> "$GITHUB_STEP_SUMMARY"
       - name: Upload Linux package
         uses: actions/upload-artifact@v7
         with:
-          name: Simple-Live-${{ steps.metadata.outputs.version }}-Linux-x64-Release-${{ steps.metadata.outputs.build-suffix }}
+          name: Simple-Live-${{ steps.metadata.outputs.version }}-Linux-x64-Release
           path: simple_live_app/build/artifacts/
           if-no-files-found: error
           retention-days: 14
