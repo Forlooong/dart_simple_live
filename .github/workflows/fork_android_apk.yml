@@ -59,6 +59,7 @@ jobs:
           flutter test --no-pub
           test/player_command_queue_test.dart
           test/live_room_lifecycle_test.dart
+          test/danmaku_lifecycle_test.dart
 
       - name: Configure APK signing
         id: signing
