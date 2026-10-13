@@ -28,10 +28,13 @@ class _MemoryStore implements NotificationStore {
   NotificationConfig config;
   Map<String, dynamic> _state = {};
   Future<void> Function()? afterWrite;
+  Future<void> Function()? beforeReadConfig;
 
   @override
-  Future<NotificationConfig> readConfig() async =>
-      NotificationConfig.fromJson(config.toJson());
+  Future<NotificationConfig> readConfig() async {
+    await beforeReadConfig?.call();
+    return NotificationConfig.fromJson(config.toJson());
+  }
 
   @override
   Future<Map<String, dynamic>> readState() async => _copy(_state);
@@ -51,6 +54,7 @@ LiveCheckRunner _runner(
   Duration roomTimeout = const Duration(seconds: 20),
   Duration budget = const Duration(minutes: 7),
   LiveAlert? show,
+  Stopwatch Function()? createStopwatch,
 }) =>
     LiveCheckRunner(
       store: store,
@@ -59,7 +63,31 @@ LiveCheckRunner _runner(
       cancel: (room) async => cancelled?.add(room.id),
       roomTimeout: roomTimeout,
       budget: budget,
+      createStopwatch: createStopwatch,
     );
+
+// Drive elapsed time separately from Flutter's fake timers to reproduce a
+// budget timer firing while the monotonic clock still reads just below it.
+class _ManualStopwatch implements Stopwatch {
+  @override
+  Duration elapsed = Duration.zero;
+  @override
+  bool isRunning = false;
+  @override
+  int get elapsedMicroseconds => elapsed.inMicroseconds;
+  @override
+  int get elapsedMilliseconds => elapsed.inMilliseconds;
+  @override
+  int get elapsedTicks => elapsedMicroseconds;
+  @override
+  int get frequency => Duration.microsecondsPerSecond;
+  @override
+  void start() => isRunning = true;
+  @override
+  void stop() => isRunning = false;
+  @override
+  void reset() => elapsed = Duration.zero;
+}
 
 Future<Directory> _temporaryDirectory() async {
   final directory =
@@ -269,51 +297,147 @@ void main() {
       expect(states[rooms[2].id]['live'], isTrue);
     });
 
-    test('a timed-out room does not prevent the next room being checked',
-        () async {
+    testWidgets('a room timeout continues without applying its late result',
+        (tester) async {
       final rooms = [_room('a'), _room('b')];
       final store = _MemoryStore(rooms);
       await _runner(store, check: (_) async => false).run();
       final shown = <String>[];
-      final neverCompletes = Completer<bool>();
-      await _runner(
+      final lateResult = Completer<bool>();
+      var finished = false;
+      final running = _runner(
         store,
         check: (room) => room.roomId == 'a'
-            ? neverCompletes.future
+            ? lateResult.future
             : Future<bool>.value(true),
         shown: shown,
         roomTimeout: const Duration(milliseconds: 10),
-      ).run().timeout(const Duration(seconds: 2));
+        createStopwatch: _ManualStopwatch.new,
+      ).run().then((_) => finished = true);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 10));
+      expect(finished, isTrue);
+      await running;
       expect(shown, [rooms[1].id]);
-      expect((await store.readState())['rooms'][rooms[0].id]['live'], isFalse);
+      final timedOutState = await store.readState();
+      expect(timedOutState['rooms'][rooms[0].id]['live'], isFalse);
+      lateResult.complete(true);
+      await tester.pump();
+      expect(await store.readState(), timedOutState);
+      expect(shown, [rooms[1].id]);
     });
 
-    test('the total budget bounds a slow request and rotates the next run',
-        () async {
-      final rooms = [_room('a'), _room('b'), _room('c')];
+    for (final roomTimeout in [
+      const Duration(milliseconds: 100),
+      const Duration(minutes: 1),
+    ]) {
+      testWidgets(
+          'a budget timeout stops and rotates even when elapsed reads low '
+          '($roomTimeout)', (tester) async {
+        final rooms = [_room('a'), _room('b'), _room('c')];
+        final store = _MemoryStore(rooms);
+        await _runner(store, check: (_) async => false).run();
+        final checked = <String>[];
+        final shown = <String>[];
+        final lateResult = Completer<bool>();
+        final stopwatch = _ManualStopwatch();
+        var finished = false;
+        final running = _runner(
+          store,
+          check: (room) {
+            checked.add(room.id);
+            return lateResult.future;
+          },
+          shown: shown,
+          roomTimeout: roomTimeout,
+          budget: const Duration(milliseconds: 100),
+          createStopwatch: () => stopwatch,
+        ).run().then((_) => finished = true);
+        await tester.pump();
+        stopwatch.elapsed = const Duration(microseconds: 99999);
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(finished, isTrue);
+        await running;
+        expect(checked, [rooms[0].id]);
+        final timedOutState = await store.readState();
+        expect(timedOutState['cursor'], rooms[0].id);
+        lateResult.complete(true);
+        await tester.pump();
+        expect(await store.readState(), timedOutState);
+        expect(shown, isEmpty);
+        checked.clear();
+        await _runner(
+          store,
+          check: (room) async {
+            checked.add(room.id);
+            return false;
+          },
+        ).run();
+        expect(checked, [rooms[1].id, rooms[2].id, rooms[0].id]);
+      });
+    }
+
+    testWidgets('a result at the deadline is discarded before state or alerts',
+        (tester) async {
+      final rooms = [_room('a'), _room('b')];
       final store = _MemoryStore(rooms);
+      await _runner(store, check: (_) async => false).run();
       final checked = <String>[];
-      final neverCompletes = Completer<bool>();
-      await _runner(
+      final shown = <String>[];
+      final result = Completer<bool>();
+      final stopwatch = _ManualStopwatch();
+      final running = _runner(
         store,
         check: (room) {
           checked.add(room.id);
-          return neverCompletes.future;
+          return result.future;
         },
-        roomTimeout: const Duration(minutes: 1),
+        shown: shown,
         budget: const Duration(milliseconds: 100),
-      ).run().timeout(const Duration(seconds: 2));
-      expect(checked, [rooms[0].id]);
-      checked.clear();
-      await _runner(
-        store,
-        check: (room) async {
-          checked.add(room.id);
-          return false;
-        },
+        createStopwatch: () => stopwatch,
       ).run();
-      expect(checked, [rooms[1].id, rooms[2].id, rooms[0].id]);
+      await tester.pump();
+      stopwatch.elapsed = const Duration(milliseconds: 100);
+      // Complete before the fake timer is dispatched: the elapsed deadline
+      // still wins over a successful Future.
+      result.complete(true);
+      await tester.pump();
+      await running;
+      expect(checked, [rooms[0].id]);
+      expect(shown, isEmpty);
+      expect((await store.readState())['rooms'][rooms[0].id]['live'], isFalse);
     });
+
+    for (final slowRead in [1, 2, 3, 4]) {
+      test('config read $slowRead cannot start work beyond the budget', () async {
+        final room = _room('a');
+        final store = _MemoryStore([room]);
+        await _runner(store, check: (_) async => false).run();
+        final stopwatch = _ManualStopwatch();
+        var reads = 0;
+        store.beforeReadConfig = () async {
+          if (++reads == slowRead) {
+            stopwatch.elapsed = const Duration(milliseconds: 100);
+          }
+        };
+        final checked = <String>[];
+        final shown = <String>[];
+        await _runner(
+          store,
+          check: (room) async {
+            checked.add(room.id);
+            return true;
+          },
+          shown: shown,
+          budget: const Duration(milliseconds: 100),
+          createStopwatch: () => stopwatch,
+        ).run();
+        expect(checked, slowRead <= 2 ? isEmpty : [room.id]);
+        expect(shown, isEmpty);
+        expect((await store.readState())['rooms'][room.id]['live'], slowRead == 4);
+      });
+    }
+
   });
 
   group('FileNotificationStore', () {
