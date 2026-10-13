@@ -1128,6 +1128,7 @@ $errorStack''');
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
+    if (playerClosing) return;
 
     if (state == AppLifecycleState.paused) {
       Log.d("进入后台");
@@ -1139,6 +1140,9 @@ $errorStack''');
     if (state == AppLifecycleState.resumed) {
       Log.d("返回前台");
       isBackground = false;
+      // canvas_danmaku pauses itself in the background but does not auto-resume.
+      // Resume even when hidden, so manually enabling the overlay still works.
+      danmakuController?.resume();
     }
   }
 
