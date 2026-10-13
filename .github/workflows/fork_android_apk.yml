@@ -3,8 +3,7 @@ name: app-build-action-android
 on:
   push:
     branches:
-      - hotfix/player-lifecycle
-      - hotfix/player-lifecycle-locked
+      - master
   workflow_dispatch:
 
 permissions:
@@ -35,13 +34,21 @@ jobs:
           flutter-version: '3.38.10'
           channel: stable
           cache: true
+      - name: Prepare readable build names
+        id: metadata
+        run: |
+          version="$(sed -n 's/^version: *\([^+ ]*\).*$/\1/p' pubspec.yaml)"
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "short-sha=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
       - name: Restore packages
         run: flutter pub get --enforce-lockfile
 
       - name: Preserve resolved dependency snapshot
         uses: actions/upload-artifact@v4
         with:
-          name: resolved-dependencies-${{ github.sha }}
+          name: Simple-Live-${{ steps.metadata.outputs.version }}-Dependencies-${{ steps.metadata.outputs.short-sha }}
           path: simple_live_app/pubspec.lock
           if-no-files-found: error
           retention-days: 14
@@ -111,6 +118,7 @@ jobs:
 
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('mode=' + mode + '\n')
+              output.write('label=' + ('ReleaseSigned' if mode == 'release-signed' else 'TestSigned') + '\n')
           PY
 
       - name: Build release APKs
@@ -119,6 +127,8 @@ jobs:
       - name: Verify APK signatures and prepare artifacts
         env:
           SIGNING_MODE: ${{ steps.signing.outputs.mode }}
+          SIGNING_LABEL: ${{ steps.signing.outputs.label }}
+          APP_VERSION: ${{ steps.metadata.outputs.version }}
         run: |
           set -euo pipefail
           sdk_root="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
@@ -129,7 +139,12 @@ jobs:
             apk="build/app/outputs/flutter-apk/app-${abi}-release.apk"
             test -s "$apk"
             "$apksigner" verify --print-certs "$apk" > "build/apk-artifacts/${abi}-SIGNING-CERT.txt"
-            cp "$apk" "build/apk-artifacts/simple-live-${abi}-release-${SIGNING_MODE}.apk"
+            case "$abi" in
+              arm64-v8a) arch=arm64 ;;
+              armeabi-v7a) arch=arm32 ;;
+              x86_64) arch=x64 ;;
+            esac
+            cp "$apk" "build/apk-artifacts/Simple-Live-${APP_VERSION}-Android-${arch}-${SIGNING_LABEL}.apk"
           done
           cp pubspec.lock build/apk-artifacts/pubspec.lock
           flutter --version > build/apk-artifacts/FLUTTER-VERSION.txt
@@ -140,19 +155,32 @@ jobs:
             "Signing: $SIGNING_MODE" \
             'Build mode: release' \
             'Package: com.xycz.simple_live' \
-            'Samsung Galaxy S20+: choose the arm64-v8a APK.' \
+            'Samsung Galaxy S20+: choose the Android-arm64 APK.' \
             'A debug-signed APK cannot update an app signed with another key.' \
             'Export settings before uninstalling any existing app; uninstalling deletes its local data.' \
             'Debug signing keys on fresh CI runners can change between runs.' \
             > BUILD-INFO.txt
           cat FLUTTER-VERSION.txt >> BUILD-INFO.txt
           cat BUILD-INFO.txt >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p ../apk-arm64
+          cp "Simple-Live-${APP_VERSION}-Android-arm64-${SIGNING_LABEL}.apk" \
+            arm64-v8a-SIGNING-CERT.txt BUILD-INFO.txt FLUTTER-VERSION.txt pubspec.lock ../apk-arm64/
+          cd ../apk-arm64
+          sha256sum *.apk > SHA256SUMS.txt
 
       - name: Upload installable APKs
         uses: actions/upload-artifact@v4
         with:
-          name: simple-live-android-release-${{ steps.signing.outputs.mode }}-${{ github.sha }}
+          name: Simple-Live-${{ steps.metadata.outputs.version }}-Android-Release-${{ steps.signing.outputs.label }}-${{ steps.metadata.outputs.short-sha }}
           path: simple_live_app/build/apk-artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload ARM64 APK for phones
+        uses: actions/upload-artifact@v4
+        with:
+          name: Simple-Live-${{ steps.metadata.outputs.version }}-Android-arm64-${{ steps.signing.outputs.label }}-${{ steps.metadata.outputs.short-sha }}
+          path: simple_live_app/build/apk-arm64/
           if-no-files-found: error
           retention-days: 14
 
