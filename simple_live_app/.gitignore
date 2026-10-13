@@ -46,7 +46,7 @@ app.*.map.json
 /android/app/release
 
 /ios/Podfile.lock
-pubspec.lock
+# Commit the app lockfile to keep Android plugin versions reproducible.
 
 .fvm/
 

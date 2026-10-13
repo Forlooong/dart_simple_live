@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - hotfix/player-lifecycle
+      - hotfix/player-lifecycle-locked
   workflow_dispatch:
 
 permissions:
@@ -35,7 +36,7 @@ jobs:
           channel: stable
           cache: true
       - name: Restore packages
-        run: flutter pub get
+        run: flutter pub get --enforce-lockfile
 
       - name: Preserve resolved dependency snapshot
         uses: actions/upload-artifact@v4
@@ -127,7 +128,7 @@ jobs:
           for abi in arm64-v8a armeabi-v7a x86_64; do
             apk="build/app/outputs/flutter-apk/app-${abi}-release.apk"
             test -s "$apk"
-            "$apksigner" verify "$apk"
+            "$apksigner" verify --print-certs "$apk" > "build/apk-artifacts/${abi}-SIGNING-CERT.txt"
             cp "$apk" "build/apk-artifacts/simple-live-${abi}-release-${SIGNING_MODE}.apk"
           done
           cp pubspec.lock build/apk-artifacts/pubspec.lock

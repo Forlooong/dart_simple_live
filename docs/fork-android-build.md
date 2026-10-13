@@ -1,7 +1,7 @@
 # Fork Android APK build
 
 The `Fork Android release APK` workflow builds the checked-out commit on pushes to
-`hotfix/player-lifecycle`, or when started with `workflow_dispatch`. It uploads
+`hotfix/player-lifecycle` or `hotfix/player-lifecycle-locked`, or when started with `workflow_dispatch`. It uploads
 GitHub Actions artifacts only. It does not create tags or publish a GitHub Release.
 
 ## Download and install
@@ -82,3 +82,10 @@ verified against Pub's SHA-256 metadata. No additional matching issue was found:
 in particular, `screen_brightness_android` `2.1.6` applies Kotlin conditionally on
 AGP versions below 9, and `url_launcher_android` `6.3.30` applies it explicitly.
 This source review does not replace building the final dependency set in CI.
+
+## Reproducible package resolution
+
+The mobile app commits `simple_live_app/pubspec.lock` from the reviewed CI
+dependency snapshot. The fork workflow uses `flutter pub get --enforce-lockfile`
+so it fails instead of silently resolving newer packages or changed checksums.
+The lockfile, Flutter version and exact commit also travel with the APK artifact.
