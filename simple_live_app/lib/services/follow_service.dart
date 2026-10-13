@@ -154,7 +154,8 @@ class FollowService extends GetxService {
   /// 获取最优并发数
   /// 根据 CPU 核心数和用户设置自动计算
   int getOptimalConcurrency() {
-    var userSetting = AppSettingsController.instance.updateFollowThreadCount.value;
+    var userSetting =
+        AppSettingsController.instance.updateFollowThreadCount.value;
 
     // 如果用户设置为 0，则自动根据 CPU 核心数计算
     if (userSetting == 0) {
@@ -403,19 +404,7 @@ class FollowService extends GetxService {
   }
 
   String generateJson() {
-    var data = followList
-        .map(
-          (item) => {
-            "siteId": item.siteId,
-            "id": item.id,
-            "roomId": item.roomId,
-            "userName": item.userName,
-            "face": item.face,
-            "addTime": item.addTime.toString(),
-            "tag": item.tag
-          },
-        )
-        .toList();
+    var data = followList.map((item) => item.toJson()).toList();
     return jsonEncode(data);
   }
 
@@ -423,7 +412,10 @@ class FollowService extends GetxService {
     var data = jsonDecode(content);
 
     for (var item in data) {
-      var follow = FollowUser.fromJson(item);
+      var follow = FollowUser.fromJson(
+        item,
+        existing: DBService.instance.followBox.get(item['id']),
+      );
       // 导入关注列表同时导入标签列表 此方法可优化为所有导入逻辑
       if (follow.tag != "全部") {
         // logic: 尝试添加，存在则返回已存在的对象

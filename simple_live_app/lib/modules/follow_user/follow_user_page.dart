@@ -1,5 +1,9 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:remixicon/remixicon.dart';
 import 'package:simple_live_app/app/app_style.dart';
 import 'package:simple_live_app/app/sites.dart';
@@ -24,6 +28,12 @@ class FollowUserPage extends GetView<FollowUserController> {
       appBar: AppBar(
         title: const Text("关注用户"),
         actions: [
+          if (Platform.isAndroid)
+            IconButton(
+              tooltip: '开播提醒说明',
+              icon: const Icon(Icons.info_outline),
+              onPressed: showNotificationHelp,
+            ),
           PopupMenuButton(
             itemBuilder: (context) {
               return const [
@@ -157,21 +167,65 @@ class FollowUserPage extends GetView<FollowUserController> {
               itemBuilder: (_, i) {
                 var item = controller.list[i];
                 var site = Sites.allSites[item.siteId]!;
-                return FollowUserItem(
-                  item: item,
-                  onRemove: () {
-                    controller.removeItem(item);
-                  },
-                  onTap: () {
-                    AppNavigator.toLiveRoomDetail(
-                        site: site, roomId: item.roomId);
-                  },
-                  onLongPress: () {
-                    setFollowTagDialog(item);
-                  },
+                return Obx(
+                  () => FollowUserItem(
+                    item: item,
+                    notificationBusy:
+                        controller.notificationUpdates.contains(item.id),
+                    onToggleNotification: Platform.isAndroid
+                        ? () => controller.toggleNotification(item)
+                        : null,
+                    onRemove: () {
+                      controller.removeItem(item);
+                    },
+                    onTap: () {
+                      AppNavigator.toLiveRoomDetail(
+                          site: site, roomId: item.roomId);
+                    },
+                    onLongPress: () {
+                      setFollowTagDialog(item);
+                    },
+                  ),
                 );
               },
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void showNotificationHelp() {
+    Get.dialog(
+      AlertDialog(
+        title: const Text('开播提醒'),
+        content: const SingleChildScrollView(
+          child: Text(
+            '点亮直播间旁的铃铛，只为选中的直播间提醒。\n\n'
+            '手机约每 15 分钟检查一次。锁屏、省电或系统限制可能延迟，'
+            '短暂开播也可能错过。首次检查只记录当前状态，不补发已在直播的提醒。\n\n'
+            '划掉应用后，是否继续检查由系统决定；强行停止后需重新打开应用。\n\n'
+            '三星手机建议将本应用移出“深度休眠应用”，并允许通知。\n\n'
+            '无需服务器或 Google 服务。',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              Get.back();
+              try {
+                if (!await openAppSettings()) {
+                  SmartDialog.showToast('请在系统设置中允许本应用发送通知');
+                }
+              } catch (_) {
+                SmartDialog.showToast('请在系统设置中允许本应用发送通知');
+              }
+            },
+            child: const Text('通知设置'),
+          ),
+          TextButton(
+            onPressed: () => Get.back(),
+            child: const Text('知道了'),
           ),
         ],
       ),

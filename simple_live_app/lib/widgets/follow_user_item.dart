@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:remixicon/remixicon.dart';
@@ -13,12 +15,16 @@ class FollowUserItem extends StatelessWidget {
   final Function()? onRemove;
   final Function()? onTap;
   final Function()? onLongPress;
+  final VoidCallback? onToggleNotification;
+  final bool notificationBusy;
   final bool playing;
   const FollowUserItem({
     required this.item,
     this.onRemove,
     this.onTap,
     this.onLongPress,
+    this.onToggleNotification,
+    this.notificationBusy = false,
     this.playing = false,
     Key? key,
   }) : super(key: key);
@@ -125,13 +131,43 @@ class FollowUserItem extends StatelessWidget {
                 ),
               ),
             )
-          : (onRemove == null
+          : (onRemove == null &&
+                  (!Platform.isAndroid || onToggleNotification == null)
               ? null
-              : IconButton(
-                  onPressed: () {
-                    onRemove?.call();
-                  },
-                  icon: const Icon(Remix.dislike_line),
+              : Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (Platform.isAndroid && onToggleNotification != null)
+                      IconButton(
+                        tooltip: notificationBusy
+                            ? '正在更新开播提醒'
+                            : (item.notifyLive ? '关闭开播提醒' : '开启开播提醒'),
+                        onPressed:
+                            notificationBusy ? null : onToggleNotification,
+                        icon: notificationBusy
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : Icon(
+                                item.notifyLive
+                                    ? Icons.notifications_active
+                                    : Icons.notifications_none,
+                                color: item.notifyLive
+                                    ? Theme.of(context).colorScheme.primary
+                                    : null,
+                              ),
+                      ),
+                    if (onRemove != null)
+                      IconButton(
+                        tooltip: '取消关注',
+                        onPressed: onRemove,
+                        icon: const Icon(Remix.dislike_line),
+                      ),
+                  ],
                 )),
       onTap: onTap,
       onLongPress: onLongPress,
