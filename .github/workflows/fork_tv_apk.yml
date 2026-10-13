@@ -1,5 +1,5 @@
 name: app-build-action-tv
-run-name: "Release TV · 1.0.1"
+run-name: "Release TV · 1.7.0"
 
 on:
   push:

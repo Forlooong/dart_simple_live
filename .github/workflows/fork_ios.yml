@@ -1,5 +1,5 @@
 name: app-build-action-ios
-run-name: "Release iOS · 1.1.2"
+run-name: "Release iOS · 1.12.3"
 
 on:
   workflow_dispatch:

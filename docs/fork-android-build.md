@@ -2,7 +2,7 @@
 
 The `app-build-action-android` workflow builds the checked-out commit on pushes to
 `master`, or when started with `workflow_dispatch`. Its run title uses the app version
-(for example, `Release Android · 1.1.2`). It uploads
+(for example, `Release Android · 1.12.3`). It uploads
 GitHub Actions artifacts only. It does not create tags or publish a GitHub Release.
 
 ## Download and install

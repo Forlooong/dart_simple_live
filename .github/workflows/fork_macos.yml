@@ -1,5 +1,5 @@
 name: app-build-action-macos
-run-name: "Release macOS · 1.1.2"
+run-name: "Release macOS · 1.12.3"
 
 on:
   workflow_dispatch:

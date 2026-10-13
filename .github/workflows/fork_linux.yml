@@ -1,5 +1,5 @@
 name: app-build-action-linux
-run-name: "Release Linux · 1.1.2"
+run-name: "Release Linux · 1.12.3"
 
 on:
   workflow_dispatch:

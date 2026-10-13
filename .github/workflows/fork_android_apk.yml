@@ -1,5 +1,5 @@
 name: app-build-action-android
-run-name: "Release Android · 1.1.2"
+run-name: "Release Android · 1.12.3"
 
 on:
   push:
