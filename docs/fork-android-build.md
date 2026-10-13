@@ -64,3 +64,21 @@ the `landscapeAutoMode` and `portraitAutoMode` methods used by the app. Its
 does not require the incompatible Kotlin configuration. Keep the version exact
 until a newer release is verified with this app's Android toolchain. This targeted
 pin does not change playback/decoder dependencies or the build toolchain.
+
+## Dynamic color dependency compatibility
+
+The app also pins `dynamic_color` to `1.8.1`. The previous caret constraint selected
+`1.9.0`, whose [changelog](https://pub.dev/packages/dynamic_color/versions/1.9.0/changelog)
+records migration to Kotlin DSL and AGP 9 support. Its published Android script
+applies only `com.android.library` before using `kotlin { compilerOptions { ... } }`,
+which fails to compile with this app's AGP `8.9.1`. The
+[1.8.1 package](https://pub.dev/packages/dynamic_color/versions/1.8.1)
+explicitly applies `kotlin-android` and provides the app's `DynamicColorBuilder` API.
+
+The Android implementations in the dependency set resolved by
+[CI run 38351500372](https://github.com/Forlooong/dart_simple_live/actions/runs/38351500372)
+were inspected for this missing-Kotlin-plugin pattern using published archives
+verified against Pub's SHA-256 metadata. No additional matching issue was found:
+in particular, `screen_brightness_android` `2.1.6` applies Kotlin conditionally on
+AGP versions below 9, and `url_launcher_android` `6.3.30` applies it explicitly.
+This source review does not replace building the final dependency set in CI.

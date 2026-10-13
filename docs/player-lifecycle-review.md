@@ -39,9 +39,9 @@ source patch, not a claim that the old patch was applied or tested.
 
 The playback patch does not change decoder defaults, `force-seekable`, media_kit
 dependency constraints, or media_kit internals. CI exposed a separate Android
-build incompatibility in the newly resolved `auto_orientation_v2` 2.4.7 plugin;
-that dependency is pinned to the originally requested 2.3.6 for this AGP 8.9.1
-project (see the build guide). The Video widget's internal lifecycle
+build incompatibilities in newly resolved `auto_orientation_v2` 2.4.7 and
+`dynamic_color` 1.9.0 plugins. They are pinned to the originally requested 2.3.6
+and 1.8.1 respectively for this AGP 8.9.1 project (see the build guide). The Video widget's internal lifecycle
 pause/resume calls are outside the application queue. This does not prove that a
 native crash is fixed, and automated fake/queue tests cannot validate Android
 MediaCodec, Surface or libmpv behavior.
