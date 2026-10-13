@@ -8,6 +8,7 @@ import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/sync_client_info_model.dart';
+import 'package:simple_live_app/modules/live_room/player/player_controller.dart';
 import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/sync_service.dart';
@@ -17,15 +18,22 @@ import 'package:simple_live_core/simple_live_core.dart';
 /// * 需要参数的页面都应使用此类
 /// * 如不需要参数，可以使用Get.toNamed
 class AppNavigator {
+  static int _liveRoomNavigationRequest = 0;
+
   /// 跳转至分类详情
-  static void toCategoryDetail(
-      {required Site site, required LiveSubCategory category}) {
+  static void toCategoryDetail({
+    required Site site,
+    required LiveSubCategory category,
+  }) {
     Get.toNamed(RoutePath.kCategoryDetail, arguments: [site, category]);
   }
 
   /// 跳转至直播间
-  static void toLiveRoomDetail(
-      {required Site site, required String roomId}) async {
+  static void toLiveRoomDetail({
+    required Site site,
+    required String roomId,
+  }) async {
+    final request = ++_liveRoomNavigationRequest;
     if (site.id == Constant.kBiliBili &&
         !BiliBiliAccountService.instance.logined.value &&
         AppSettingsController.instance.bilibiliLoginTip.value) {
@@ -42,17 +50,25 @@ class AppNavigator {
           ),
         ],
       );
+      if (request != _liveRoomNavigationRequest) return;
       if (result == true) {
         await toBiliBiliLogin();
+        if (request != _liveRoomNavigationRequest) return;
         if (!BiliBiliAccountService.instance.logined.value) {
           SmartDialog.showToast("未完成登录");
         }
       }
     }
 
-    Get.toNamed(RoutePath.kLiveRoomDetail, arguments: site, parameters: {
-      "roomId": roomId,
-    });
+    // GetX onClose is synchronous; wait for any already-started teardown
+    // before a new room acquires native/system resources.
+    await PlayerController.pendingCleanup;
+    if (request != _liveRoomNavigationRequest) return;
+    Get.toNamed(
+      RoutePath.kLiveRoomDetail,
+      arguments: site,
+      parameters: {"roomId": roomId},
+    );
   }
 
   /// 跳转至哔哩哔哩登录
@@ -66,13 +82,12 @@ class AppNavigator {
 
   /// 跳转至同步设备
   static Future toSyncDevice(
-      SyncClinet client, SyncClientInfoModel info) async {
+    SyncClinet client,
+    SyncClientInfoModel info,
+  ) async {
     await Get.toNamed(
       RoutePath.kLocalSyncDevice,
-      arguments: {
-        "client": client,
-        "info": info,
-      },
+      arguments: {"client": client, "info": info},
     );
   }
 }

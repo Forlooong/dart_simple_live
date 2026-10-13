@@ -8,10 +8,15 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Fork CI must explicitly opt in before a release build can use a debug key.
+// Real release signing always takes precedence when key.properties is present.
+val allowDebugReleaseSigning = providers.gradleProperty("allowDebugReleaseSigning")
+    .map { it.toBoolean() }
+    .getOrElse(false)
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("key.properties")
 if (keystorePropertiesFile.exists()) {
-    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+    FileInputStream(keystorePropertiesFile).use { keystoreProperties.load(it) }
 }
 
 android {
@@ -40,20 +45,32 @@ android {
     }
 
     signingConfigs {
-        create("release") {
-            keyAlias = keystoreProperties["keyAlias"] as String
-            keyPassword = keystoreProperties["keyPassword"] as String
-            storeFile = keystoreProperties["storeFile"]?.let { file(it) }
-            storePassword = keystoreProperties["storePassword"] as String
-            isV1SigningEnabled = true
-            isV2SigningEnabled = true
+        if (keystorePropertiesFile.exists()) {
+            val requiredKeys = listOf("keyAlias", "keyPassword", "storeFile", "storePassword")
+            require(requiredKeys.all { !keystoreProperties.getProperty(it).isNullOrBlank() }) {
+                "key.properties is incomplete. Supply all release signing properties."
+            }
+            create("release") {
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                isV1SigningEnabled = true
+                isV2SigningEnabled = true
+            }
         }
     }
 
     buildTypes {
         release {
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = when {
+                keystorePropertiesFile.exists() -> signingConfigs.getByName("release")
+                allowDebugReleaseSigning -> signingConfigs.getByName("debug")
+                else -> throw GradleException(
+                    "Release signing is missing. Configure android/key.properties, or explicitly " +
+                        "opt in to a test-only debug-signed release with -PallowDebugReleaseSigning=true."
+                )
+            }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:auto_orientation_v2/auto_orientation_v2.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:file_picker/file_picker.dart';
@@ -21,8 +22,19 @@ import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:window_manager/window_manager.dart';
+import 'package:simple_live_app/modules/live_room/player/player_command_queue.dart';
 
 mixin PlayerMixin {
+  final _playerCommands = PlayerCommandQueue(
+    onError: (error, stack) => Log.e(error.toString(), stack),
+  );
+
+  bool get playerClosing => _playerCommands.isClosing;
+
+  /// All native commands must use this per-player queue. Do not nest calls.
+  Future<void> runPlayerCommand(Future<void> Function() command) =>
+      _playerCommands.run(command);
+
   GlobalKey<VideoState> globalPlayerKey = GlobalKey<VideoState>();
   GlobalKey globalDanmuKey = GlobalKey();
 
@@ -36,21 +48,22 @@ mixin PlayerMixin {
     ),
   );
 
-  /// 初始化播放器并设置 ao 参数
+  /// Called inside runPlayerCommand, alongside the corresponding open.
   Future<void> initializePlayer() async {
-    var pp = player.platform as NativePlayer;
+    if (playerClosing) return;
+    final platform = player.platform;
+    if (platform is! NativePlayer) return;
     // 设置音频输出驱动
     if (AppSettingsController.instance.customPlayerOutput.value) {
-      if (player.platform is NativePlayer) {
-        await (player.platform as dynamic).setProperty(
-          'ao',
-          AppSettingsController.instance.audioOutputDriver.value,
-        );
-      }
+      await platform.setProperty(
+        'ao',
+        AppSettingsController.instance.audioOutputDriver.value,
+      );
+      if (playerClosing) return;
     }
     // media_kit 仓库更新导致的问题，临时解决办法
-    if(Platform.isAndroid){
-      await pp.setProperty('force-seekable', 'yes');
+    if (Platform.isAndroid) {
+      await platform.setProperty('force-seekable', 'yes');
     }
   }
 
@@ -143,6 +156,7 @@ mixin PlayerStateMixin on PlayerMixin {
 
   /// 显示控制器
   void showControls() {
+    if (playerClosing) return;
     showControlsState.value = true;
     resetHideControlsTimer();
   }
@@ -150,17 +164,14 @@ mixin PlayerStateMixin on PlayerMixin {
   /// 开始隐藏控制器计时
   /// - 当点击控制器上时功能时需要重新计时
   void resetHideControlsTimer() {
+    if (playerClosing) return;
     hideControlsTimer?.cancel();
 
-    hideControlsTimer = Timer(
-      const Duration(
-        seconds: 5,
-      ),
-      hideControls,
-    );
+    hideControlsTimer = Timer(const Duration(seconds: 5), hideControls);
   }
 
   void updateScaleMode() {
+    if (playerClosing) return;
     var boxFit = BoxFit.contain;
     double? aspectRatio;
     if (player.state.width != null && player.state.height != null) {
@@ -180,10 +191,7 @@ mixin PlayerStateMixin on PlayerMixin {
       boxFit = BoxFit.contain;
       aspectRatio = 4 / 3;
     }
-    globalPlayerKey.currentState?.update(
-      aspectRatio: aspectRatio,
-      fit: boxFit,
-    );
+    globalPlayerKey.currentState?.update(aspectRatio: aspectRatio, fit: boxFit);
   }
 }
 mixin PlayerDanmakuMixin on PlayerStateMixin {
@@ -191,6 +199,7 @@ mixin PlayerDanmakuMixin on PlayerStateMixin {
   DanmakuController? danmakuController;
 
   void initDanmakuController(DanmakuController e) {
+    if (playerClosing) return;
     danmakuController = e;
     // danmakuController?.updateOption(
     //   DanmakuOption(
@@ -206,15 +215,19 @@ mixin PlayerDanmakuMixin on PlayerStateMixin {
   }
 
   void updateDanmuOption(DanmakuOption? option) {
+    if (playerClosing) return;
     if (danmakuController == null || option == null) return;
     danmakuController!.updateOption(option);
   }
 
   void disposeDanmakuController() {
-    danmakuController?.clear();
+    final controller = danmakuController;
+    danmakuController = null;
+    controller?.clear();
   }
 
   void addDanmaku(List<DanmakuContentItem> items) {
+    if (playerClosing) return;
     if (!showDanmakuState.value) {
       return;
     }
@@ -233,6 +246,7 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
 
   /// 初始化一些系统状态
   void initSystem() async {
+    if (playerClosing) return;
     if (Platform.isAndroid || Platform.isIOS) {
       VolumeController.instance.showSystemUI = false;
     }
@@ -251,7 +265,7 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
 
   /// 释放一些系统状态
   Future resetSystem() async {
-    _pipSubscription?.cancel();
+    // PiP and player subscriptions are canceled synchronously by closePlayer.
     //pip.dispose();
     await SystemChrome.setEnabledSystemUIMode(
       SystemUiMode.edgeToEdge,
@@ -273,6 +287,7 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
 
   /// 进入全屏
   void enterFullScreen() {
+    if (playerClosing) return;
     fullScreenState.value = true;
     if (Platform.isAndroid || Platform.isIOS) {
       //全屏
@@ -290,8 +305,10 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
   /// 退出全屏
   void exitFull() {
     if (Platform.isAndroid || Platform.isIOS) {
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge,
-          overlays: SystemUiOverlay.values);
+      SystemChrome.setEnabledSystemUIMode(
+        SystemUiMode.edgeToEdge,
+        overlays: SystemUiOverlay.values,
+      );
       setPortraitOrientation();
     } else {
       windowManager.setFullScreen(false);
@@ -306,13 +323,16 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
 
   ///小窗模式()
   void enterSmallWindow() async {
+    if (playerClosing) return;
     if (!(Platform.isAndroid || Platform.isIOS)) {
       fullScreenState.value = true;
       smallWindowState.value = true;
 
       // 读取窗口大小
       _lastWindowSize = await windowManager.getSize();
+      if (playerClosing) return;
       _lastWindowPosition = await windowManager.getPosition();
+      if (playerClosing) return;
 
       windowManager.setTitleBarStyle(TitleBarStyle.hidden);
       // 获取视频窗口大小
@@ -338,8 +358,10 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
       fullScreenState.value = false;
       smallWindowState.value = false;
       windowManager.setTitleBarStyle(TitleBarStyle.normal);
-      windowManager.setSize(_lastWindowSize!);
-      windowManager.setPosition(_lastWindowPosition!);
+      if (_lastWindowSize != null) windowManager.setSize(_lastWindowSize!);
+      if (_lastWindowPosition != null) {
+        windowManager.setPosition(_lastWindowPosition!);
+      }
       windowManager.setAlwaysOnTop(false);
       //windowManager.setAlignment(Alignment.center);
     }
@@ -347,7 +369,9 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
 
   /// 设置横屏
   Future setLandscapeOrientation() async {
-    if (await beforeIOS16()) {
+    final usesAutoOrientation = await beforeIOS16();
+    if (playerClosing) return;
+    if (usesAutoOrientation) {
       AutoOrientation.landscapeAutoMode();
     } else {
       SystemChrome.setPreferredOrientations([
@@ -379,17 +403,24 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
   }
 
   Future saveScreenshot() async {
+    if (playerClosing) return;
     try {
       SmartDialog.showLoading(msg: "正在保存截图");
       //检查相册权限,仅iOS需要
       var permission = await Utils.checkPhotoPermission();
+      if (playerClosing) return;
       if (!permission) {
         SmartDialog.showToast("没有相册权限");
         SmartDialog.dismiss(status: SmartStatus.loading);
         return;
       }
 
-      var imageData = await player.screenshot();
+      Uint8List? screenshot;
+      await runPlayerCommand(() async {
+        screenshot = await player.screenshot();
+      });
+      if (playerClosing) return;
+      final imageData = screenshot;
       if (imageData == null) {
         SmartDialog.showToast("截图失败,数据为空");
         SmartDialog.dismiss(status: SmartStatus.loading);
@@ -397,9 +428,7 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
       }
 
       if (Platform.isIOS || Platform.isAndroid) {
-        await ImageGallerySaverPlus.saveImage(
-          imageData,
-        );
+        await ImageGallerySaverPlus.saveImage(imageData);
         SmartDialog.showToast("已保存截图至相册");
       } else {
         //选择保存文件夹
@@ -429,10 +458,13 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
   bool danmakuStateBeforePIP = false;
 
   Future enablePIP() async {
+    if (playerClosing) return;
     if (!Platform.isAndroid) {
       return;
     }
-    if (await pip.isPipAvailable == false) {
+    final pipAvailable = await pip.isPipAvailable;
+    if (playerClosing) return;
+    if (!pipAvailable) {
       SmartDialog.showToast("设备不支持小窗播放");
       return;
     }
@@ -455,13 +487,11 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     } else {
       ratio = const Rational.landscape();
     }
-    await pip.enable(
-      ImmediatePiP(
-        aspectRatio: ratio,
-      ),
-    );
+    await pip.enable(ImmediatePiP(aspectRatio: ratio));
 
+    if (playerClosing) return;
     _pipSubscription ??= pip.pipStatusStream.listen((event) {
+      if (playerClosing) return;
       if (event == PiPStatus.disabled) {
         danmakuController?.clear();
         showDanmakuState.value = danmakuStateBeforePIP;
@@ -527,6 +557,7 @@ mixin PlayerGestureControlMixin
 
   /// 竖向手势开始
   void onVerticalDragStart(DragStartDetails details) async {
+    if (playerClosing) return;
     if (lockControlsState.value && fullScreenState.value) {
       return;
     }
@@ -548,6 +579,7 @@ mixin PlayerGestureControlMixin
     }
     if (Platform.isAndroid || Platform.isIOS) {
       _currentVolume = await VolumeController.instance.getVolume();
+      if (playerClosing) return;
     }
     if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS) {
       _currentBrightness = await ScreenBrightness.instance.application;
@@ -578,6 +610,7 @@ mixin PlayerGestureControlMixin
   int lastVolume = -1; // it's ok to be -1
 
   void setGestureVolume(double dy) {
+    if (playerClosing) return;
     double value = 0.0;
     double seek;
     if (dy > verStartPosition) {
@@ -610,11 +643,13 @@ mixin PlayerGestureControlMixin
   }
 
   Future _realSetVolume(int volume) async {
+    if (playerClosing) return;
     Log.logPrint(volume);
     VolumeController.instance.setVolume(volume / 100);
   }
 
   void setGestureBrightness(double dy) {
+    if (playerClosing) return;
     double value = 0.0;
     if (dy > verStartPosition) {
       value = ((dy - verStartPosition) / (Get.height * 0.5));
@@ -659,12 +694,23 @@ class PlayerController extends BaseController
         PlayerDanmakuMixin,
         PlayerSystemMixin,
         PlayerGestureControlMixin {
+  static Future<void> _pendingCleanup = Future<void>.value();
+
+  /// Navigation may await old rooms' cleanup before creating the next room.
+  /// Active players still have independent native command queues.
+  static Future<void> get pendingCleanup => _pendingCleanup;
+
   @override
   void onInit() {
     initSystem();
     initStream();
     //设置音量
-    player.setVolume(AppSettingsController.instance.playerVolume.value);
+    unawaited(
+      runPlayerCommand(
+        () =>
+            player.setVolume(AppSettingsController.instance.playerVolume.value),
+      ),
+    );
     super.onInit();
   }
 
@@ -676,7 +722,9 @@ class PlayerController extends BaseController
   StreamSubscription? _playingSubscription;
 
   void initStream() {
+    if (playerClosing) return;
     _errorSubscription = player.stream.error.listen((event) {
+      if (playerClosing) return;
       Log.d("播放器错误：$event");
       // 跳过无音频输出的错误
       // Could not open/initialize audio device -> no sound.
@@ -688,6 +736,7 @@ class PlayerController extends BaseController
     });
 
     _playingSubscription = player.stream.playing.listen((event) {
+      if (playerClosing) return;
       if (event) {
         WakelockPlus.enable();
         Log.d("Playing");
@@ -695,35 +744,43 @@ class PlayerController extends BaseController
     });
 
     _completedSubscription = player.stream.completed.listen((event) {
+      if (playerClosing) return;
       if (event) {
         mediaEnd();
       }
     });
     _logSubscription = player.stream.log.listen((event) {
+      if (playerClosing) return;
       Log.d("播放器日志：$event");
     });
     _widthSubscription = player.stream.width.listen((event) {
+      if (playerClosing) return;
       Log.d(
-          'width:$event  W:${(player.state.width)}  H:${(player.state.height)}');
+        'width:$event  W:${(player.state.width)}  H:${(player.state.height)}',
+      );
       isVertical.value =
           (player.state.height ?? 9) > (player.state.width ?? 16);
     });
     _heightSubscription = player.stream.height.listen((event) {
+      if (playerClosing) return;
       Log.d(
-          'height:$event  W:${(player.state.width)}  H:${(player.state.height)}');
+        'height:$event  W:${(player.state.width)}  H:${(player.state.height)}',
+      );
       isVertical.value =
           (player.state.height ?? 9) > (player.state.width ?? 16);
     });
   }
 
-  void disposeStream() {
-    _errorSubscription?.cancel();
-    _completedSubscription?.cancel();
-    _widthSubscription?.cancel();
-    _heightSubscription?.cancel();
-    _logSubscription?.cancel();
-    _pipSubscription?.cancel();
-    _playingSubscription?.cancel();
+  Future<void> disposeStream() async {
+    await Future.wait<void>([
+      if (_errorSubscription != null) _errorSubscription!.cancel(),
+      if (_completedSubscription != null) _completedSubscription!.cancel(),
+      if (_widthSubscription != null) _widthSubscription!.cancel(),
+      if (_heightSubscription != null) _heightSubscription!.cancel(),
+      if (_logSubscription != null) _logSubscription!.cancel(),
+      if (_pipSubscription != null) _pipSubscription!.cancel(),
+      if (_playingSubscription != null) _playingSubscription!.cancel(),
+    ]);
   }
 
   void mediaEnd() {
@@ -756,9 +813,7 @@ class PlayerController extends BaseController
             subtitle: Text(player.state.videoParams.toString()),
             onTap: () {
               Clipboard.setData(
-                ClipboardData(
-                  text: "VideoParams\n${player.state.videoParams}",
-                ),
+                ClipboardData(text: "VideoParams\n${player.state.videoParams}"),
               );
             },
           ),
@@ -767,9 +822,7 @@ class PlayerController extends BaseController
             subtitle: Text(player.state.audioParams.toString()),
             onTap: () {
               Clipboard.setData(
-                ClipboardData(
-                  text: "AudioParams\n${player.state.audioParams}",
-                ),
+                ClipboardData(text: "AudioParams\n${player.state.audioParams}"),
               );
             },
           ),
@@ -778,9 +831,7 @@ class PlayerController extends BaseController
             subtitle: Text(player.state.playlist.toString()),
             onTap: () {
               Clipboard.setData(
-                ClipboardData(
-                  text: "Media\n${player.state.playlist}",
-                ),
+                ClipboardData(text: "Media\n${player.state.playlist}"),
               );
             },
           ),
@@ -789,9 +840,7 @@ class PlayerController extends BaseController
             subtitle: Text(player.state.track.audio.toString()),
             onTap: () {
               Clipboard.setData(
-                ClipboardData(
-                  text: "AudioTrack\n${player.state.track.audio}",
-                ),
+                ClipboardData(text: "AudioTrack\n${player.state.track.audio}"),
               );
             },
           ),
@@ -800,9 +849,7 @@ class PlayerController extends BaseController
             subtitle: Text(player.state.track.video.toString()),
             onTap: () {
               Clipboard.setData(
-                ClipboardData(
-                  text: "VideoTrack\n${player.state.track.audio}",
-                ),
+                ClipboardData(text: "VideoTrack\n${player.state.track.audio}"),
               );
             },
           ),
@@ -822,9 +869,7 @@ class PlayerController extends BaseController
             subtitle: Text(player.state.volume.toString()),
             onTap: () {
               Clipboard.setData(
-                ClipboardData(
-                  text: "Volume\n${player.state.volume}",
-                ),
+                ClipboardData(text: "Volume\n${player.state.volume}"),
               );
             },
           ),
@@ -833,16 +878,53 @@ class PlayerController extends BaseController
     );
   }
 
-  @override
-  void onClose() async {
+  Future<void>? _closeFuture;
+
+  /// Closing is visible immediately, even though native disposal is async.
+  Future<void> closePlayer() {
+    if (_closeFuture != null) return _closeFuture!;
+    _playerCommands.stopAcceptingCommands();
     Log.w("播放器关闭");
-    if (smallWindowState.value) {
-      exitSmallWindow();
+    hidevolumeTimer?.cancel();
+    hideControlsTimer?.cancel();
+    hideSeekTipTimer?.cancel();
+    throttle?.storeFunc = null;
+    throttle = null;
+    verticalDragging = false;
+    // Observe cancellation failures now, even if an in-flight open delays
+    // the queued native disposal for a while.
+    final streamsCanceled = disposeStream().catchError(
+      (Object error, StackTrace stack) => Log.e(error.toString(), stack),
+    );
+
+    // Synchronous UI cleanup must not prevent native player disposal.
+    try {
+      if (smallWindowState.value) exitSmallWindow();
+      disposeDanmakuController();
+    } catch (error, stack) {
+      Log.e(error.toString(), stack);
     }
-    disposeStream();
-    disposeDanmakuController();
-    await resetSystem();
-    await player.dispose();
+
+    final closed = _closeFuture = _playerCommands.close(() async {
+      await streamsCanceled;
+      try {
+        await player.dispose();
+      } finally {
+        await resetSystem();
+      }
+    });
+    _pendingCleanup = Future.wait<void>([
+      _pendingCleanup,
+      // The command queue logs failures. Navigation must still be allowed
+      // after a failed cleanup, and must never receive an unhandled error.
+      closed.then<void>((_) {}, onError: (Object _, StackTrace __) {}),
+    ]).then<void>((_) {});
+    return closed;
+  }
+
+  @override
+  void onClose() {
+    unawaited(closePlayer());
     super.onClose();
   }
 }
