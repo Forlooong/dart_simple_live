@@ -27,6 +27,8 @@ import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/douyin_account_service.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/follow_service.dart';
+import 'package:simple_live_app/services/live_notification_service.dart';
+import 'package:simple_live_app/services/live_notifications/notification_navigation.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
 import 'package:simple_live_app/services/sync_service.dart';
 import 'package:simple_live_app/widgets/status/app_loadding_widget.dart';
@@ -57,6 +59,9 @@ void main() async {
   );
   SystemChrome.setSystemUIOverlayStyle(systemUiOverlayStyle);
   runApp(const MyApp());
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    LiveNotificationService.instance.markNavigationReady();
+  });
 }
 
 /// 将Hive数据迁移到Application Support
@@ -138,6 +143,13 @@ Future initServices() async {
 
   Get.put(FollowService());
 
+  final notifications = Get.put(LiveNotificationService());
+  try {
+    await notifications.init();
+  } catch (_) {
+    Log.w('开播提醒初始化失败，可稍后重新开启提醒');
+  }
+
   initCoreLog();
 }
 
@@ -211,7 +223,10 @@ class MyApp extends StatelessWidget {
         // 升级后Android页面过渡动画似乎有BUG
         defaultTransition: Platform.isAndroid ? Transition.cupertino : null,
         //debugShowCheckedModeBanner: false,
-        navigatorObservers: [FlutterSmartDialog.observer],
+        navigatorObservers: [
+          FlutterSmartDialog.observer,
+          liveNotificationNavigationObserver,
+        ],
         builder: FlutterSmartDialog.init(
           loadingBuilder: ((msg) => const AppLoaddingWidget()),
           //字体大小不跟随系统变化

@@ -12,10 +12,10 @@ import 'package:simple_live_app/app/controller/base_controller.dart';
 import 'package:simple_live_app/app/event_bus.dart';
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/utils.dart';
-import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/history.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/db_service.dart';
+import 'package:simple_live_app/services/follow_import.dart';
 import 'package:simple_live_app/services/signalr_service.dart';
 
 class RemoteSyncRoomController extends BaseController {
@@ -124,13 +124,11 @@ class RemoteSyncRoomController extends BaseController {
   void onReceiveFavorite(bool overlay, String data) async {
     try {
       var jsonBody = json.decode(data);
-      if (overlay) {
-        await DBService.instance.followBox.clear();
-      }
-      for (var item in jsonBody) {
-        var user = FollowUser.fromJson(item);
-        await DBService.instance.followBox.put(user.id, user);
-      }
+      await importFollowUsers(
+        DBService.instance.followBox,
+        jsonBody,
+        replace: overlay,
+      );
       SmartDialog.showToast('已同步关注用户列表');
       EventBus.instance.emit(Constant.kUpdateFollow, 0);
       SmartDialog.showToast("已同步关注列表");

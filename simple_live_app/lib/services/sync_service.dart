@@ -10,11 +10,11 @@ import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/app/event_bus.dart';
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/utils.dart';
-import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/follow_user_tag.dart';
 import 'package:simple_live_app/models/db/history.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/db_service.dart';
+import 'package:simple_live_app/services/follow_import.dart';
 import 'package:udp/udp.dart';
 import 'package:shelf/shelf.dart' as shelf;
 import 'package:shelf/shelf_io.dart' as shelf_io;
@@ -251,13 +251,11 @@ class SyncService extends GetxService {
       var body = await request.readAsString();
       Log.d('_syncFollowUserReuqest: $body');
       var jsonBody = json.decode(body);
-      if (overlay == 1) {
-        await DBService.instance.followBox.clear();
-      }
-      for (var item in jsonBody) {
-        var user = FollowUser.fromJson(item);
-        await DBService.instance.followBox.put(user.id, user);
-      }
+      await importFollowUsers(
+        DBService.instance.followBox,
+        jsonBody,
+        replace: overlay == 1,
+      );
 
       SmartDialog.showToast('已同步关注用户列表');
       EventBus.instance.emit(Constant.kUpdateFollow, 0);
@@ -274,10 +272,11 @@ class SyncService extends GetxService {
   }
 
   /// 同步标签列表
-  Future<shelf.Response> _syncFollowUserTagRequest(shelf.Request request) async {
+  Future<shelf.Response> _syncFollowUserTagRequest(
+      shelf.Request request) async {
     try {
       var overlay =
-      int.parse(request.requestedUri.queryParameters['overlay'] ?? '0');
+          int.parse(request.requestedUri.queryParameters['overlay'] ?? '0');
 
       var body = await request.readAsString();
       Log.d('_syncFollowUserTagRequest: $body');

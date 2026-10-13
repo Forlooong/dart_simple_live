@@ -338,18 +338,43 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
           var oldId = roomId;
           rxRoomId.value = detail.value!.roomId;
           if (followed.value) {
-            // 更新关注列表
-            DBService.instance.deleteFollow("${site.id}_$oldId");
-            DBService.instance.addFollow(
+            final oldFollowId = "${site.id}_$oldId";
+            final newFollowId = "${site.id}_$roomId";
+            final oldFollow = DBService.instance.followBox.get(oldFollowId);
+            final existingFollow =
+                DBService.instance.followBox.get(newFollowId);
+            // 先保存新 ID，避免迁移失败时丢失原关注及开播提醒选择。
+            await DBService.instance.addFollow(
               FollowUser(
-                id: "${site.id}_$roomId",
+                id: newFollowId,
                 roomId: roomId,
                 siteId: site.id,
                 userName: detail.value!.userName,
                 face: detail.value!.userAvatar,
-                addTime: DateTime.now(),
+                addTime: oldFollow?.addTime ??
+                    existingFollow?.addTime ??
+                    DateTime.now(),
+                tag: oldFollow?.tag ?? existingFollow?.tag ?? "全部",
+                notifyLive: (oldFollow?.notifyLive ?? false) ||
+                    (existingFollow?.notifyLive ?? false),
               ),
             );
+            // 标签另外保存关注 ID，也需要一同迁移。
+            for (final tag in DBService.instance.getFollowTagList()) {
+              if (tag.userId.contains(oldFollowId)) {
+                await DBService.instance.updateFollowTag(
+                  tag.copyWith(
+                    userId: tag.userId
+                        .map((id) => id == oldFollowId ? newFollowId : id)
+                        .toSet()
+                        .toList(),
+                  ),
+                );
+              }
+            }
+            await DBService.instance.deleteFollow(oldFollowId);
+            if (!_isCurrentRoom(generation)) return;
+            EventBus.instance.emit(Constant.kUpdateFollow, newFollowId);
           } else {
             followed.value = DBService.instance.getFollowExist(
               "${site.id}_$roomId",
