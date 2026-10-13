@@ -37,8 +37,11 @@ source patch, not a claim that the old patch was applied or tested.
 
 ## Deliberate limits
 
-The patch does not change decoder defaults, `force-seekable`, Flutter dependency
-constraints, or media_kit internals. The Video widget's internal lifecycle
+The playback patch does not change decoder defaults, `force-seekable`, media_kit
+dependency constraints, or media_kit internals. CI exposed a separate Android
+build incompatibility in the newly resolved `auto_orientation_v2` 2.4.7 plugin;
+that dependency is pinned to the originally requested 2.3.6 for this AGP 8.9.1
+project (see the build guide). The Video widget's internal lifecycle
 pause/resume calls are outside the application queue. This does not prove that a
 native crash is fixed, and automated fake/queue tests cannot validate Android
 MediaCodec, Surface or libmpv behavior.

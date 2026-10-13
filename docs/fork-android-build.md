@@ -48,3 +48,19 @@ The workflow verifies APK signatures before uploading, uses Java 17 and Flutter
 3.38.10, and runs focused checks on the player lifecycle changes. These checks do
 not replace on-device testing of rotation, background/foreground, picture-in-picture,
 rapid source changes, and repeated enter/exit behavior.
+
+## Orientation dependency compatibility
+
+The app pins `auto_orientation_v2` to `2.3.6`. The previous caret constraint
+allowed Pub to resolve `2.4.7`, whose Android build script invokes `kotlin { ... }`
+without applying the Kotlin Android plugin. With this project's AGP `8.9.1`,
+configuration fails with `Could not find method kotlin()` before APK compilation.
+See the [upstream Android build script](https://github.com/rizkyghofur/auto_orientation_v2/blob/1d966da33ac6a32d7f0f9a54284b049dd14bf59b/android/build.gradle).
+
+The published [2.3.6 package](https://pub.dev/packages/auto_orientation_v2/versions/2.3.6)
+uses a Java Android plugin, includes the AGP-8 namespace declaration, and exposes
+the `landscapeAutoMode` and `portraitAutoMode` methods used by the app. Its
+[Android build script](https://github.com/rizkyghofur/auto_orientation_v2/blob/121bd6f91f13021847db734b0f97af088df98891/android/build.gradle)
+does not require the incompatible Kotlin configuration. Keep the version exact
+until a newer release is verified with this app's Android toolchain. This targeted
+pin does not change playback/decoder dependencies or the build toolchain.
