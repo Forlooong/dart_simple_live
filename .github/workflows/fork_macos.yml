@@ -1,5 +1,5 @@
 name: app-build-action-macos
-run-name: Release macOS 1.11.4
+run-name: "Release macOS · build #${{ github.run_number }}.${{ github.run_attempt }} · ${{ github.ref_name }}"
 
 on:
   workflow_dispatch:
@@ -40,10 +40,19 @@ jobs:
       - name: Read package version
         id: metadata
         run: |
-          version="$(sed -n 's/^version: *\([^+ ]*\).*$/\1/p' pubspec.yaml)"
+          set -euo pipefail
+          version="$(sed -n 's/^version: *\([^ ]*\).*$/\1/p' pubspec.yaml | tr -d '\r')"
           test -n "$version"
+          short_sha="${GITHUB_SHA:0:7}"
+          build_suffix="build.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}-${short_sha}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "short-sha=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+          echo "build-suffix=$build_suffix" >> "$GITHUB_OUTPUT"
+          {
+            printf '## Build identity\n\n'
+            printf -- '- Package version: `%s`\n' "$version"
+            printf -- '- CI build: `%s.%s`\n' "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_ATTEMPT"
+            printf -- '- Commit: `%s`\n\n' "$GITHUB_SHA"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Restore locked packages
         run: flutter pub get --enforce-lockfile
       - name: Configure macOS release
@@ -59,20 +68,21 @@ jobs:
       - name: Package macOS app
         env:
           APP_VERSION: ${{ steps.metadata.outputs.version }}
+          BUILD_SUFFIX: ${{ steps.metadata.outputs.build-suffix }}
         run: |
           set -euo pipefail
           app='build/macos/Build/Products/Release/Simple Live.app'
           test -d "$app"
           lipo "$app/Contents/MacOS/Simple Live" -verify_arch arm64 x86_64
           mkdir -p build/artifacts
-          ditto -c -k --sequesterRsrc --keepParent "$app" "build/artifacts/Simple-Live-${APP_VERSION}-macOS-universal-Unsigned.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "build/artifacts/Simple-Live-${APP_VERSION}-${BUILD_SUFFIX}-macOS-universal-Unsigned.zip"
           unzip -t build/artifacts/*.zip
           (cd build/artifacts && shasum -a 256 *.zip > SHA256SUMS.txt)
           printf '%s\n' "macOS $APP_VERSION · arm64 + x64 · unsigned ZIP" 'Not notarized; macOS may prevent opening this build.' >> "$GITHUB_STEP_SUMMARY"
       - name: Upload macOS package
         uses: actions/upload-artifact@v7
         with:
-          name: Simple-Live-${{ steps.metadata.outputs.version }}-macOS-universal-Unsigned-${{ steps.metadata.outputs.short-sha }}
+          name: Simple-Live-${{ steps.metadata.outputs.version }}-macOS-universal-Unsigned-${{ steps.metadata.outputs.build-suffix }}
           path: simple_live_app/build/artifacts/
           if-no-files-found: error
           retention-days: 14

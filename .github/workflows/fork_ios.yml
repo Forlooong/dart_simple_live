@@ -1,5 +1,5 @@
 name: app-build-action-ios
-run-name: Release iOS 1.11.4
+run-name: "Release iOS · build #${{ github.run_number }}.${{ github.run_attempt }} · ${{ github.ref_name }}"
 
 on:
   workflow_dispatch:
@@ -40,10 +40,19 @@ jobs:
       - name: Read package version
         id: metadata
         run: |
-          version="$(sed -n 's/^version: *\([^+ ]*\).*$/\1/p' pubspec.yaml)"
+          set -euo pipefail
+          version="$(sed -n 's/^version: *\([^ ]*\).*$/\1/p' pubspec.yaml | tr -d '\r')"
           test -n "$version"
+          short_sha="${GITHUB_SHA:0:7}"
+          build_suffix="build.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}-${short_sha}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "short-sha=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+          echo "build-suffix=$build_suffix" >> "$GITHUB_OUTPUT"
+          {
+            printf '## Build identity\n\n'
+            printf -- '- Package version: `%s`\n' "$version"
+            printf -- '- CI build: `%s.%s`\n' "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_ATTEMPT"
+            printf -- '- Commit: `%s`\n\n' "$GITHUB_SHA"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Restore locked packages
         run: flutter pub get --enforce-lockfile
       - name: Build unsigned iOS app
@@ -51,19 +60,20 @@ jobs:
       - name: Package unsigned IPA
         env:
           APP_VERSION: ${{ steps.metadata.outputs.version }}
+          BUILD_SUFFIX: ${{ steps.metadata.outputs.build-suffix }}
         run: |
           set -euo pipefail
           test -d build/ios/iphoneos/Runner.app
           mkdir -p build/ipa/Payload build/artifacts
           ditto build/ios/iphoneos/Runner.app build/ipa/Payload/Runner.app
-          (cd build/ipa && zip -qry "../artifacts/Simple-Live-${APP_VERSION}-iOS-arm64-Unsigned.ipa" Payload)
+          (cd build/ipa && zip -qry "../artifacts/Simple-Live-${APP_VERSION}-${BUILD_SUFFIX}-iOS-arm64-Unsigned.ipa" Payload)
           unzip -t build/artifacts/*.ipa
           (cd build/artifacts && shasum -a 256 *.ipa > SHA256SUMS.txt)
           printf '%s\n' "iOS $APP_VERSION · arm64 · unsigned IPA" 'Requires signing with an Apple development/distribution identity before installation.' >> "$GITHUB_STEP_SUMMARY"
       - name: Upload iOS package
         uses: actions/upload-artifact@v7
         with:
-          name: Simple-Live-${{ steps.metadata.outputs.version }}-iOS-arm64-Unsigned-${{ steps.metadata.outputs.short-sha }}
+          name: Simple-Live-${{ steps.metadata.outputs.version }}-iOS-arm64-Unsigned-${{ steps.metadata.outputs.build-suffix }}
           path: simple_live_app/build/artifacts/
           if-no-files-found: error
           retention-days: 14
