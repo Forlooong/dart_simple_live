@@ -1,5 +1,5 @@
 name: app-build-action-tv
-run-name: "Release TV · 1.7.0"
+run-name: "Release TV · 1.7.0+10605 · #${{ github.run_number }}"
 
 on:
   push:
@@ -8,6 +8,7 @@ on:
     paths:
       - 'simple_live_tv_app/**'
       - 'simple_live_core/**'
+      - 'tool/**'
       - '.github/workflows/fork_tv_apk.yml'
   workflow_dispatch:
 
@@ -30,6 +31,13 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Check version and prepare build identity
+        id: metadata
+        run: python ../tool/version.py metadata tv
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
@@ -39,30 +47,6 @@ jobs:
           flutter-version: '3.38.10'
           channel: stable
           cache: true
-      - name: Prepare readable build names
-        id: metadata
-        run: |
-          set -euo pipefail
-          version="$(sed -n 's/^version: *\([^ ]*\).*$/\1/p' pubspec.yaml | tr -d '\r')"
-          package_version="$version"
-          [[ "$package_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+$ ]]
-          version="${package_version%%+*}"
-          # GitHub evaluates run-name before checkout. Fail if a version bump
-          # forgot to update this workflow's static, version-only title.
-          expected_title="Release TV · $version"
-          actual_title="$(sed -n 's/^run-name: "\(.*\)"$/\1/p' ../.github/workflows/fork_tv_apk.yml)"
-          if [[ "$actual_title" != "$expected_title" ]]; then
-            echo "::error::Update run-name to $expected_title to match pubspec.yaml"
-            exit 1
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          {
-            printf '## Build identity\n\n'
-            printf -- '- Package version: `%s`\n' "$package_version"
-            printf -- '- CI build: `%s.%s`\n' "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_ATTEMPT"
-            printf -- '- Commit: `%s`\n\n' "$GITHUB_SHA"
-          } >> "$GITHUB_STEP_SUMMARY"
-
       - name: Restore packages
         run: flutter pub get --enforce-lockfile
 
@@ -127,22 +111,36 @@ jobs:
         env:
           SIGNING_MODE: ${{ steps.signing.outputs.mode }}
           SIGNING_LABEL: ${{ steps.signing.outputs.label }}
-          APP_VERSION: ${{ steps.metadata.outputs.version }}
+          APP_VERSION: ${{ steps.metadata.outputs.artifact_version }}
+          PACKAGE_VERSION: ${{ steps.metadata.outputs.package_version }}
+          VERSION_NAME: ${{ steps.metadata.outputs.version }}
+          BUILD_NUMBER: ${{ steps.metadata.outputs.build_number }}
         run: |
           set -euo pipefail
           sdk_root="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
           apksigner="$(find "$sdk_root/build-tools" -name apksigner -type f | sort -V | tail -n 1)"
           test -n "$apksigner"
+          aapt2="$(dirname "$apksigner")/aapt2"
+          test -x "$aapt2"
           mkdir -p build/apk-artifacts
           for abi in arm64-v8a armeabi-v7a x86_64; do
             apk="build/app/outputs/flutter-apk/app-${abi}-release.apk"
             test -s "$apk"
             "$apksigner" verify --print-certs "$apk" > "build/apk-artifacts/${abi}-SIGNING-CERT.txt"
             case "$abi" in
-              arm64-v8a) arch=arm64 ;;
-              armeabi-v7a) arch=arm32 ;;
-              x86_64) arch=x64 ;;
+              arm64-v8a) arch=arm64; offset=2000 ;;
+              armeabi-v7a) arch=arm32; offset=1000 ;;
+              x86_64) arch=x64; offset=4000 ;;
             esac
+            badging="$("$aapt2" dump badging "$apk")"
+            actual_name="$(sed -n "s/^package:.* versionName='\([^']*\)'.*/\1/p" <<< "$badging")"
+            actual_code="$(sed -n "s/^package:.* versionCode='\([^']*\)'.*/\1/p" <<< "$badging")"
+            expected_code=$((BUILD_NUMBER + offset))
+            if [[ "$actual_name" != "$VERSION_NAME" || "$actual_code" != "$expected_code" ]]; then
+              echo "::error::$abi APK version $actual_name+$actual_code does not match source $PACKAGE_VERSION (expected ABI code $expected_code)"
+              exit 1
+            fi
+            printf 'Source: %s\nAPK: %s+%s\n' "$PACKAGE_VERSION" "$actual_name" "$actual_code" > "build/apk-artifacts/${abi}-VERSION.txt"
             cp "$apk" "build/apk-artifacts/Simple-Live-${APP_VERSION}-Android-TV-${arch}-${SIGNING_LABEL}.apk"
           done
           cp pubspec.lock build/apk-artifacts/pubspec.lock
@@ -150,6 +148,8 @@ jobs:
           cd build/apk-artifacts
           sha256sum *.apk > SHA256SUMS.txt
           printf '%s\n' \
+            "Source version: $PACKAGE_VERSION" \
+            "Artifact version: $APP_VERSION" \
             "Commit: $GITHUB_SHA" \
             "Signing: $SIGNING_MODE" \
             'Build mode: release' \
@@ -165,7 +165,7 @@ jobs:
       - name: Upload installable APKs
         uses: actions/upload-artifact@v7
         with:
-          name: Simple-Live-${{ steps.metadata.outputs.version }}-Android-TV-Release-${{ steps.signing.outputs.label }}
+          name: Simple-Live-${{ steps.metadata.outputs.artifact_version }}-Android-TV-Release-${{ steps.signing.outputs.label }}
           path: simple_live_tv_app/build/apk-artifacts/
           if-no-files-found: error
           retention-days: 14
