@@ -60,10 +60,12 @@ mixin PlayerMixin {
       );
       if (playerClosing) return;
     }
-    // media_kit 仓库更新导致的问题，临时解决办法
-    if (Platform.isAndroid) {
-      await platform.setProperty('force-seekable', 'yes');
-    }
+    // Live HTTP streams cannot seek back to zero after EOF. Recovery opens a
+    // fresh URL instead. Retain the player's bounded memory buffer, without
+    // media_kit's disk cache (unavailable on the affected Android build).
+    await platform.setProperty('force-seekable', 'no');
+    if (playerClosing) return;
+    await platform.setProperty('cache-on-disk', 'no');
   }
 
   /// 视频控制器
@@ -719,6 +721,7 @@ class PlayerController extends BaseController
   StreamSubscription? _heightSubscription;
   StreamSubscription? _logSubscription;
   StreamSubscription? _playingSubscription;
+  StreamSubscription<Duration>? _positionSubscription;
 
   void initStream() {
     if (playerClosing) return;
@@ -747,6 +750,9 @@ class PlayerController extends BaseController
       if (event) {
         mediaEnd();
       }
+    });
+    _positionSubscription = player.stream.position.listen((position) {
+      if (!playerClosing) mediaPosition(position);
     });
     _logSubscription = player.stream.log.listen((event) {
       if (playerClosing) return;
@@ -779,6 +785,7 @@ class PlayerController extends BaseController
       if (_logSubscription != null) _logSubscription!.cancel(),
       if (_pipSubscription != null) _pipSubscription!.cancel(),
       if (_playingSubscription != null) _playingSubscription!.cancel(),
+      if (_positionSubscription != null) _positionSubscription!.cancel(),
     ]);
   }
 
@@ -789,6 +796,8 @@ class PlayerController extends BaseController
   void mediaError(String error) {
     WakelockPlus.disable();
   }
+
+  void mediaPosition(Duration position) {}
 
   void showDebugInfo() {
     Utils.showBottomSheet(

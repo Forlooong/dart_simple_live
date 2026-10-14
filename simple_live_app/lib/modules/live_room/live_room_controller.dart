@@ -105,8 +105,21 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   int _playGeneration = 0;
   bool _playlistReady = false;
   int? _retryGeneration;
-  int? _pendingRetryGeneration;
-  String? _pendingRetryError;
+  int _mediaGeneration = 0;
+  int? _failedMediaGeneration;
+  int? _pendingRetryMediaGeneration;
+  bool _recoveryExhausted = false;
+  int _consecutiveRecoveryAttempts = 0;
+  Duration? _firstPlaybackPosition;
+  Duration? _lastPlaybackPosition;
+
+  void _resetRecovery() {
+    _failedMediaGeneration = null;
+    _pendingRetryMediaGeneration = null;
+    _recoveryExhausted = false;
+    _consecutiveRecoveryAttempts = 0;
+    mediaErrorRetryCount = 0;
+  }
 
   bool _isCurrentRoom(int generation) =>
       !playerClosing && generation == _roomGeneration;
@@ -116,8 +129,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   void _invalidatePlayback() {
     _playGeneration++;
-    _pendingRetryGeneration = null;
-    _pendingRetryError = null;
+    _resetRecovery();
     _playlistReady = false;
     playUrls.clear();
     qualites.clear();
@@ -469,8 +481,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     }
     final room = _roomGeneration;
     final playback = ++_playGeneration;
-    _pendingRetryGeneration = null;
-    _pendingRetryError = null;
+    _resetRecovery();
     final requestedSite = site;
     final requestedDetail = detail.value!;
     final quality = qualites[currentQuality];
@@ -499,6 +510,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       Log.logPrint(e);
       errorMsg.value = "无法读取或打开播放地址";
       SmartDialog.showToast(errorMsg.value);
+      if (_playlistReady) mediaError(errorMsg.value);
     }
   }
 
@@ -511,8 +523,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     }
     // Invalidate any delayed retry for the previous selection.
     _playGeneration++;
-    _pendingRetryGeneration = null;
-    _pendingRetryError = null;
+    _resetRecovery();
     currentLineIndex = index;
     mediaErrorRetryCount = 0;
     setPlayer();
@@ -524,26 +535,31 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     if (!_isCurrentPlayback(room, playback) || playUrls.isEmpty) return;
     currentLineInfo.value = "线路${currentLineIndex + 1}";
     errorMsg.value = "";
-    final mediaList = playUrls.map((url) {
-      final finalUrl = AppSettingsController.instance.playerForceHttps.value
-          ? url.replaceAll("http://", "https://")
-          : url;
-      return Media(finalUrl, httpHeaders: playHeaders);
-    }).toList();
+    final media = _mediaForLine(currentLineIndex);
     await runPlayerCommand(() async {
       if (!_isCurrentPlayback(room, playback)) return;
       await initializePlayer();
       if (!_isCurrentPlayback(room, playback)) return;
-      // Events may arrive before open completes. Retry commands are queued
-      // behind this open, so do not lose the first error/completed event.
+      // A failure belongs to one native open, not to the whole room. An old
+      // error + EOF pair must not consume another attempt during URL refresh.
+      _mediaGeneration++;
+      _failedMediaGeneration = null;
+      _firstPlaybackPosition = null;
+      _lastPlaybackPosition = null;
       _playlistReady = true;
-      try {
-        await player.open(Playlist(mediaList));
-      } catch (_) {
-        if (_isCurrentPlayback(room, playback)) _playlistReady = false;
-        rethrow;
-      }
+      // CDN alternatives are not consecutive programmes. Keep libmpv from
+      // advancing to another line independently of application recovery.
+      // open() also avoids jump() -> play() -> seek(0) on an ended live FLV.
+      await player.open(media);
     });
+  }
+
+  Media _mediaForLine(int index) {
+    final url = playUrls[index];
+    final finalUrl = AppSettingsController.instance.playerForceHttps.value
+        ? url.replaceFirst("http://", "https://")
+        : url;
+    return Media(finalUrl, httpHeaders: playHeaders);
   }
 
   Future<void> setPlayer() async {
@@ -556,17 +572,13 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         index >= playUrls.length) {
       return;
     }
-    currentLineInfo.value = "线路${index + 1}";
-    errorMsg.value = "";
     try {
-      await runPlayerCommand(() async {
-        if (!_isCurrentPlayback(room, playback) || !_playlistReady) return;
-        await player.jump(index);
-      });
+      await initPlaylist();
     } catch (e) {
       if (!_isCurrentPlayback(room, playback)) return;
       Log.logPrint(e);
       errorMsg.value = "播放失败";
+      mediaError(errorMsg.value);
     }
   }
 
@@ -582,55 +594,144 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   void mediaError(String error) {
     if (playerClosing || !_playlistReady) return;
     super.mediaError(error);
-    _retryPlayback(error);
+    _retryPlayback();
   }
 
-  Future<void> _retryPlayback([String? error]) async {
+  Future<void> _retryPlayback() async {
     if (playerClosing ||
         !_playlistReady ||
+        _recoveryExhausted ||
         currentLineIndex < 0 ||
         currentLineIndex >= playUrls.length) {
       return;
     }
+    if (_failedMediaGeneration == _mediaGeneration) return;
+    _failedMediaGeneration = _mediaGeneration;
     if (_retryGeneration == _playGeneration) {
-      // Coalesce terminal events emitted during an in-flight retry.
-      _pendingRetryGeneration = _playGeneration;
-      _pendingRetryError = error ?? _pendingRetryError;
+      // Only a failure of the newly opened media needs another attempt.
+      // Duplicates from the old media have already returned above.
+      _pendingRetryMediaGeneration = _mediaGeneration;
       return;
     }
+    await _recoverPlayback();
+  }
+
+  Future<void> _recoverPlayback() async {
     final room = _roomGeneration;
     final playback = _playGeneration;
     _retryGeneration = playback;
     try {
-      if (mediaErrorRetryCount < 2) {
-        // Reserve the attempt before awaiting: error/completed can arrive together.
-        final attempt = ++mediaErrorRetryCount;
-        if (attempt == 2) {
-          await Future<void>.delayed(const Duration(seconds: 1));
+      while (_isCurrentPlayback(room, playback) && !_recoveryExhausted) {
+        // Two attempts per line, at most six without sustained playback.
+        // Refreshing a URL must not reset this budget.
+        if (_consecutiveRecoveryAttempts >= 6 ||
+            (mediaErrorRetryCount >= 2 &&
+                currentLineIndex + 1 >= playUrls.length)) {
+          _recoveryExhausted = true;
+          errorMsg.value = "播放失败，请刷新直播间重试";
+          Log.w("播放恢复已停止：已达到重试上限");
+          showPlaybackFailure();
+          return;
         }
+        if (mediaErrorRetryCount >= 2) {
+          currentLineIndex++;
+          mediaErrorRetryCount = 0;
+        }
+        mediaErrorRetryCount++;
+        final attempt = ++_consecutiveRecoveryAttempts;
+        // Give the old stream's error/EOF notifications time to drain before
+        // replacing it, and avoid repeatedly rebuilding the native decoder.
+        await Future<void>.delayed(const Duration(milliseconds: 300));
         if (!_isCurrentPlayback(room, playback)) return;
-        await setPlayer();
-      } else if (currentLineIndex + 1 < playUrls.length) {
-        currentLineIndex++;
-        mediaErrorRetryCount = 0;
-        await setPlayer();
-      } else if (error != null) {
-        errorMsg.value = "播放失败";
-        SmartDialog.showToast("播放失败:$error");
-      } else {
-        liveStatus.value = false;
+        Log.i("播放恢复：第 $attempt 次，重新获取直播地址");
+        try {
+          if (!await _refreshPlaybackSource(room, playback)) return;
+          await initPlaylist();
+          return;
+        } catch (e, stack) {
+          if (!_isCurrentPlayback(room, playback)) return;
+          Log.e("播放恢复失败：${e.runtimeType}", stack);
+          // HTTP/open exceptions may not emit a native terminal event.
+          // Retry them here, under the same bounded recovery owner.
+        }
       }
     } finally {
       if (_retryGeneration == playback) _retryGeneration = null;
-      if (_pendingRetryGeneration == playback) {
-        final pendingError = _pendingRetryError;
-        _pendingRetryGeneration = null;
-        _pendingRetryError = null;
-        if (_isCurrentPlayback(room, playback)) {
-          _retryPlayback(pendingError);
+      if (_isCurrentPlayback(room, playback)) {
+        final pending = _pendingRetryMediaGeneration;
+        _pendingRetryMediaGeneration = null;
+        if (!_recoveryExhausted && pending == _mediaGeneration) {
+          unawaited(_recoverPlayback());
         }
       }
     }
+  }
+
+  Future<bool> _refreshPlaybackSource(int room, int playback) async {
+    final requestedSite = site;
+    final selectedQuality = qualites[currentQuality].quality;
+    final selectedIndex = currentQuality;
+    // Douyu keeps its timestamped signing arguments in detail.data; Douyin
+    // keeps URLs in quality.data. Refresh the whole source, not only the URL.
+    final freshDetail =
+        await requestedSite.liveSite.getRoomDetail(roomId: roomId);
+    if (!_isCurrentPlayback(room, playback)) return false;
+    if (!freshDetail.status && !freshDetail.isRecord) {
+      _recoveryExhausted = true;
+      _playlistReady = false;
+      liveStatus.value = false;
+      await runPlayerCommand(() async {
+        if (_isCurrentPlayback(room, playback)) await player.stop();
+      });
+      return false;
+    }
+    final freshQualities =
+        await requestedSite.liveSite.getPlayQualites(detail: freshDetail);
+    if (!_isCurrentPlayback(room, playback)) return false;
+    if (freshQualities.isEmpty) throw StateError('No live qualities');
+    var qualityIndex =
+        freshQualities.indexWhere((item) => item.quality == selectedQuality);
+    if (qualityIndex < 0) {
+      qualityIndex = selectedIndex.clamp(0, freshQualities.length - 1);
+    }
+    final freshUrls = await requestedSite.liveSite.getPlayUrls(
+      detail: freshDetail,
+      quality: freshQualities[qualityIndex],
+    );
+    if (!_isCurrentPlayback(room, playback)) return false;
+    if (freshUrls.urls.isEmpty) throw StateError('No live URLs');
+    detail.value = freshDetail;
+    qualites.value = freshQualities;
+    currentQuality = qualityIndex;
+    currentQualityInfo.value = freshQualities[qualityIndex].quality;
+    playUrls.value = freshUrls.urls;
+    playHeaders = freshUrls.headers;
+    currentLineIndex = currentLineIndex.clamp(0, playUrls.length - 1);
+    return true;
+  }
+
+  @override
+  void mediaPosition(Duration position) {
+    if (playerClosing ||
+        !_playlistReady ||
+        _failedMediaGeneration == _mediaGeneration) {
+      return;
+    }
+    if (_firstPlaybackPosition == null ||
+        (_lastPlaybackPosition != null && position < _lastPlaybackPosition!)) {
+      _firstPlaybackPosition = position;
+    }
+    _lastPlaybackPosition = position;
+    // playing=true is emitted before a decoder has produced any frames.
+    // Only advancing media time replenishes the automatic recovery budget.
+    if (position - _firstPlaybackPosition! >= const Duration(seconds: 10)) {
+      mediaErrorRetryCount = 0;
+      _consecutiveRecoveryAttempts = 0;
+    }
+  }
+
+  void showPlaybackFailure() {
+    SmartDialog.showToast(errorMsg.value);
   }
 
   /// 读取SC

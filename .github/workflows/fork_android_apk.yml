@@ -82,6 +82,7 @@ jobs:
           flutter test --no-pub
           test/player_command_queue_test.dart
           test/live_room_lifecycle_test.dart
+          test/live_playback_recovery_test.dart
           test/danmaku_lifecycle_test.dart
           test/follow_notification_preferences_test.dart
           test/live_status_validation_test.dart
@@ -172,6 +173,7 @@ jobs:
           flutter --version > build/apk-artifacts/FLUTTER-VERSION.txt
           cd build/apk-artifacts
           sha256sum *.apk > SHA256SUMS.txt
+          sha256sum "Simple-Live-${APP_VERSION}-Android-arm64-${SIGNING_LABEL}.apk" > arm64-SHA256SUMS.txt
           printf '%s\n' \
             "Commit: $GITHUB_SHA" \
             "Signing: $SIGNING_MODE" \
@@ -192,14 +194,29 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Upload arm64 APK
+        id: upload_arm64
+        uses: actions/upload-artifact@v7
+        with:
+          name: Simple-Live-${{ steps.metadata.outputs.version }}-Android-arm64-${{ steps.signing.outputs.label }}
+          path: |
+            simple_live_app/build/apk-artifacts/Simple-Live-${{ steps.metadata.outputs.version }}-Android-arm64-${{ steps.signing.outputs.label }}.apk
+            simple_live_app/build/apk-artifacts/arm64-SHA256SUMS.txt
+            simple_live_app/build/apk-artifacts/arm64-v8a-SIGNING-CERT.txt
+            simple_live_app/build/apk-artifacts/BUILD-INFO.txt
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Summarize Android download
         env:
           APP_VERSION: ${{ steps.metadata.outputs.version }}
           SIGNING_LABEL: ${{ steps.signing.outputs.label }}
           ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+          ARM64_ARTIFACT_URL: ${{ steps.upload_arm64.outputs.artifact-url }}
         run: |
           {
             printf '## Simple Live %s · Android\n\n' "$APP_VERSION"
+            printf '[Download arm64 APK](%s) (%s, ZIP archive for arm64-v8a devices).\n\n' "$ARM64_ARTIFACT_URL" "$SIGNING_LABEL"
             printf '[Download all APKs](%s) (%s). Sign in to GitHub, download and unzip the artifact, then install one APK matching your device.\n\n' "$ARTIFACT_URL" "$SIGNING_LABEL"
             printf '%s\n' \
               '- arm64: 64-bit ARM devices (arm64-v8a).' \
