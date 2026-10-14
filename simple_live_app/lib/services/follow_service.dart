@@ -192,12 +192,12 @@ class FollowService extends GetxService with WidgetsBindingObserver {
 
   Future<void> loadData({bool updateStatus = true, bool automatic = false}) {
     if (_closed) return Future.value();
-    if (updateStatus && _refreshFuture != null) return _refreshFuture!;
     final list = DBService.instance.getFollowList();
     getAllTagList();
     followList.assignAll(list);
     filterData();
     if (!updateStatus || (automatic && !_foreground)) return Future.value();
+    // Always reconcile storage, even while an earlier status round drains.
     return startUpdateStatus(automatic: automatic);
   }
 

@@ -1,10 +1,11 @@
 name: app-build-action-android
-run-name: "Release Android · 1.12.5+11106 · #${{ github.run_number }}"
+run-name: "Release Android · 1.12.6+11107 · #${{ github.run_number }}"
 
 on:
   push:
     branches:
       - master
+      - fix/follow-list-refresh
   workflow_dispatch:
 
 permissions:
@@ -78,6 +79,7 @@ jobs:
           test/chat_message_buffer_test.dart
           test/danmaku_rule_validation_test.dart
           test/follow_refresh_test.dart
+          test/follow_user_controller_test.dart
           test/follow_notification_preferences_test.dart
           test/live_status_validation_test.dart
           test/live_notification_runner_test.dart

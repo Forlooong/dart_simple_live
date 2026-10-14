@@ -17,6 +17,7 @@ class FollowUserController extends BasePageController<FollowUser> {
   StreamSubscription<dynamic>? onUpdatedIndexedStream;
   StreamSubscription<dynamic>? onUpdatedListStream;
   final notificationUpdates = <String>{}.obs;
+  bool _closed = false;
 
   /// 0:全部 1:直播中 2:未直播
   var filterMode = FollowUserTag(id: "0", tag: "全部", userId: []).obs;
@@ -41,6 +42,7 @@ class FollowUserController extends BasePageController<FollowUser> {
     );
     onUpdatedListStream =
         FollowService.instance.updatedListStream.listen((event) {
+      updateTagList();
       filterData();
     });
     super.onInit();
@@ -48,9 +50,22 @@ class FollowUserController extends BasePageController<FollowUser> {
 
   @override
   Future refreshData() async {
+    if (_closed) return;
     await FollowService.instance.loadData();
+    if (_closed) return;
     updateTagList();
-    super.refreshData();
+    await loadData();
+  }
+
+  // Follows are one reactive snapshot, not an append-only paginated feed.
+  // A service event can arrive while BasePageController awaits getData; using
+  // that pagination path would append the same rooms a second time.
+  @override
+  Future<void> loadData() async {
+    if (_closed) return;
+    currentPage = 1;
+    filterData();
+    pageLoadding.value = false;
   }
 
   @override
@@ -81,6 +96,7 @@ class FollowUserController extends BasePageController<FollowUser> {
   }
 
   void filterData() {
+    if (_closed) return;
     if (filterMode.value.tag == "全部") {
       list.assignAll(FollowService.instance.followList.value);
     } else if (filterMode.value.tag == "直播中") {
@@ -91,6 +107,9 @@ class FollowUserController extends BasePageController<FollowUser> {
       FollowService.instance.filterDataByTag(filterMode.value);
       list.assignAll(FollowService.instance.curTagFollowList);
     }
+    pageEmpty.value = list.isEmpty;
+    pageError.value = false;
+    canLoadMore.value = false;
   }
 
   void setFilterMode(FollowUserTag tag) {
@@ -214,7 +233,9 @@ class FollowUserController extends BasePageController<FollowUser> {
 
   @override
   void onClose() {
+    _closed = true;
     onUpdatedIndexedStream?.cancel();
+    onUpdatedListStream?.cancel();
     super.onClose();
   }
 }

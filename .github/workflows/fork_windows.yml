@@ -1,5 +1,5 @@
 name: app-build-action-windows
-run-name: "Release Windows · 1.12.5+11106 · #${{ github.run_number }}"
+run-name: "Release Windows · 1.12.6+11107 · #${{ github.run_number }}"
 
 on:
   workflow_dispatch:

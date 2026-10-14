@@ -137,6 +137,40 @@ void main() {
     expect(service.updating.value, isFalse);
   });
 
+  test(
+    'a refresh during polling reconciles persisted membership immediately',
+    () async {
+      final round = service.loadData();
+      await database.deleteFollow(rooms.first.id);
+      final added = FollowUser(
+        id: 'test_new',
+        roomId: 'new',
+        siteId: 'test',
+        userName: 'New room',
+        face: '',
+        addTime: DateTime(2026),
+      );
+      await database.addFollow(added);
+      final joined = service.loadData();
+      expect(identical(joined, round), isTrue);
+      expect(
+        service.followList.any((room) => room.id == rooms.first.id),
+        isFalse,
+      );
+      expect(
+        service.followList.where((room) => room.id == added.id),
+        hasLength(1),
+      );
+      await finishRequests();
+      await round;
+      expect(
+        service.followList.where((room) => room.id == added.id),
+        hasLength(1),
+      );
+      expect(rooms.first.liveStatus.value, 0);
+    },
+  );
+
   test('background stops admission; failures clear refreshing state', () async {
     final round = service.loadData();
     service.didChangeAppLifecycleState(AppLifecycleState.resumed);

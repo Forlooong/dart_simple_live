@@ -990,12 +990,12 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   }
 
   /// 关注用户
-  void followUser() {
+  Future<void> followUser() async {
     if (detail.value == null) {
       return;
     }
     var id = "${site.id}_$roomId";
-    DBService.instance.addFollow(
+    await DBService.instance.addFollow(
       FollowUser(
         id: id,
         roomId: roomId,
@@ -1019,7 +1019,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     }
 
     var id = "${site.id}_$roomId";
-    DBService.instance.deleteFollow(id);
+    await DBService.instance.deleteFollow(id);
     followed.value = false;
     EventBus.instance.emit(Constant.kUpdateFollow, id);
   }
