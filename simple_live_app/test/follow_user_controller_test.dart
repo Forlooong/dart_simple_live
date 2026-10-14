@@ -106,7 +106,7 @@ void main() {
   tearDown(() async {
     if (!controllerClosed) controller.onClose();
     await Get.delete<FollowService>(force: true);
-    await Get.reset();
+    Get.reset();
     Sites.allSites.remove('follow_test');
     Sites.allSites.remove('follow_other');
     await Hive.close();
