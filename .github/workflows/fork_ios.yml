@@ -1,5 +1,5 @@
 name: app-build-action-ios
-run-name: "Release iOS · 1.12.4+11105 · #${{ github.run_number }}"
+run-name: "Release iOS · 1.12.5+11106 · #${{ github.run_number }}"
 
 on:
   workflow_dispatch:
@@ -8,6 +8,8 @@ on:
     paths:
       - 'simple_live_app/**'
       - 'simple_live_core/**'
+      - 'packages/**'
+      - '.github/actions/**'
       - 'tool/**'
       - '.github/workflows/fork_ios.yml'
 
@@ -45,10 +47,19 @@ jobs:
           flutter-version: '3.38.10'
           channel: stable
           cache: true
+      - name: Set up Rust native targets
+        uses: ./.github/actions/setup-native
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
       - name: Restore locked packages
         run: flutter pub get --enforce-lockfile
+      - uses: ./.github/actions/check-native
+      - name: Test native assets on iOS simulator
+        run: python ../tool/test_ios_native.py
       - name: Build unsigned iOS app
         run: flutter build ios --release --no-codesign --no-pub
+      - name: Verify device native libraries
+        run: python ../tool/verify_native_bundle.py ios build/ios/iphoneos/Runner.app
       - name: Package unsigned IPA
         env:
           APP_VERSION: ${{ steps.metadata.outputs.artifact_version }}

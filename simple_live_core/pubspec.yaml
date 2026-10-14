@@ -18,8 +18,9 @@ dependencies:
     path: ./packages/tars_dart
   fixnum: ^1.1.0
   dart_quickjs:
-    git:
-      url: https://github.com/xiaoyaocz/dart_quickjs
+    path: packages/dart_quickjs
+  danmaku_native:
+    path: packages/danmaku_native
 
 dev_dependencies: 
   lints: ^2.0.0

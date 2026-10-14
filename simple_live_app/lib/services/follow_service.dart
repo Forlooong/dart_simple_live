@@ -17,8 +17,12 @@ import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/follow_user_tag.dart';
 import 'package:simple_live_app/services/db_service.dart';
+import 'package:simple_live_core/simple_live_core.dart';
 
-class FollowService extends GetxService {
+class FollowService extends GetxService with WidgetsBindingObserver {
+  FollowService({DateTime Function()? now}) : _now = now ?? DateTime.now;
+
+  final DateTime Function() _now;
   StreamSubscription<dynamic>? subscription;
   static FollowService get instance => Get.find<FollowService>();
 
@@ -47,11 +51,36 @@ class FollowService extends GetxService {
   var updating = false.obs;
 
   Timer? updateTimer;
+  final _refreshQueue = StatusRefreshQueue();
+  Future<void>? _refreshFuture;
+  Worker? _concurrencyWorker;
+  DateTime? _nextRefresh;
+  int _watchers = 0;
+  int _generation = 0;
+  bool _foreground = true;
+  bool _closed = false;
+
+  void beginWatching() {
+    _watchers++;
+    _refreshQueue.concurrency = getOptimalConcurrency();
+  }
+
+  void endWatching() {
+    if (_watchers > 0) _watchers--;
+    _refreshQueue.concurrency = getOptimalConcurrency();
+  }
 
   @override
   void onInit() {
+    WidgetsBinding.instance.addObserver(this);
+    _foreground = WidgetsBinding.instance.lifecycleState == null ||
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
     subscription = EventBus.instance.listen(Constant.kUpdateFollow, (p0) {
       loadData(updateStatus: false);
+    });
+    _concurrencyWorker =
+        ever(AppSettingsController.instance.updateFollowThreadCount, (_) {
+      _refreshQueue.concurrency = getOptimalConcurrency();
     });
     initTimer();
     super.onInit();
@@ -121,52 +150,63 @@ class FollowService extends GetxService {
   }
 
   void initTimer() {
-    if (AppSettingsController.instance.autoUpdateFollowEnable.value) {
-      updateTimer?.cancel();
-      updateTimer = Timer.periodic(
-        Duration(
-            minutes:
-                AppSettingsController.instance.autoUpdateFollowDuration.value),
-        (timer) {
-          Log.logPrint("Update Follow Timer");
-          loadData();
-        },
-      );
-    } else {
-      updateTimer?.cancel();
-    }
+    updateTimer?.cancel();
+    _nextRefresh = _now().add(_refreshInterval);
+    _scheduleRefresh();
   }
 
-  Future<void> loadData({bool updateStatus = true}) async {
-    var list = DBService.instance.getFollowList();
-    getAllTagList();
-    if (list.isEmpty) {
-      updating.value = false;
-      followList.assignAll(list);
+  Duration get _refreshInterval => Duration(
+      minutes: AppSettingsController.instance.autoUpdateFollowDuration.value
+          .clamp(1, 1440));
+
+  void _scheduleRefresh() {
+    updateTimer?.cancel();
+    if (_closed ||
+        !_foreground ||
+        !AppSettingsController.instance.autoUpdateFollowEnable.value) {
       return;
     }
-    followList.assignAll(list);
-    if (updateStatus) {
-      startUpdateStatus();
+    final delay = (_nextRefresh ?? _now()).difference(_now());
+    updateTimer = Timer(delay.isNegative ? Duration.zero : delay, () {
+      _nextRefresh = _now().add(_refreshInterval);
+      unawaited(loadData(automatic: true));
+      _scheduleRefresh();
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final resumed = state == AppLifecycleState.resumed;
+    final wasForeground = _foreground;
+    _foreground = resumed;
+    if (!resumed) {
+      updateTimer?.cancel();
+      if (_refreshQueue.isRunning) _nextRefresh = _now();
+      _refreshQueue.pause();
+    } else if (!wasForeground) {
+      // Join the draining round before scheduling the one due foreground refresh.
+      unawaited((_refreshFuture ?? Future<void>.value())
+          .whenComplete(_scheduleRefresh));
     }
   }
 
-  /// 获取最优并发数
-  /// 根据 CPU 核心数和用户设置自动计算
+  Future<void> loadData({bool updateStatus = true, bool automatic = false}) {
+    if (_closed) return Future.value();
+    if (updateStatus && _refreshFuture != null) return _refreshFuture!;
+    final list = DBService.instance.getFollowList();
+    getAllTagList();
+    followList.assignAll(list);
+    filterData();
+    if (!updateStatus || (automatic && !_foreground)) return Future.value();
+    return startUpdateStatus(automatic: automatic);
+  }
+
+  /// Network concurrency is independent of CPU count and lower during playback.
   int getOptimalConcurrency() {
-    var userSetting =
+    final userSetting =
         AppSettingsController.instance.updateFollowThreadCount.value;
-
-    // 如果用户设置为 0，则自动根据 CPU 核心数计算
-    if (userSetting == 0) {
-      var cpuCount = Platform.numberOfProcessors;
-      // 网络 I/O 密集型任务，并发数可以是 CPU 核心数的 2-3 倍
-      var optimal = (cpuCount * 2.5).round();
-      // 限制在合理范围内（最少 4，最多 20）
-      return optimal.clamp(4, 20);
-    }
-
-    return userSetting;
+    final configured = userSetting == 0 ? 4 : userSetting.clamp(1, 8);
+    return _watchers > 0 ? configured.clamp(1, 2) : configured;
   }
 
   /// 按平台交错排列，避免单一平台阻塞
@@ -190,62 +230,61 @@ class FollowService extends GetxService {
     return result;
   }
 
-  void startUpdateStatus() async {
+  Future<void> startUpdateStatus({bool automatic = false}) {
+    if (_refreshFuture != null) return _refreshFuture!;
     updatedCount = 0;
     updating.value = true;
-
-    var concurrency = getOptimalConcurrency();
-
-    Log.logPrint("开始更新关注状态，并发数: $concurrency，总数: ${followList.length}");
-
-    // 按平台交错排列，避免单一平台阻塞
-    var interleavedList = interleaveByPlatform(followList);
-
-    // 创建任务队列
-    var taskQueue = Queue<FollowUser>.from(interleavedList);
-
-    // 工作函数 - 持续从队列中取任务执行
-    Future<void> worker(int workerId) async {
-      while (taskQueue.isNotEmpty) {
-        var item = taskQueue.removeFirst();
-        await updateLiveStatus(item);
-      }
-    }
-
-    // 启动固定数量的并发 worker
-    var workers = <Future>[];
-    for (var i = 0; i < concurrency; i++) {
-      workers.add(worker(i));
-    }
-
-    await Future.wait(workers);
-
-    Log.logPrint("关注状态更新完成");
-  }
-
-  Future updateLiveStatus(FollowUser item) async {
-    try {
-      var site = Sites.allSites[item.siteId]!;
-      // 先只查状态
-      var isLiving = await site.liveSite.getLiveStatus(roomId: item.roomId);
-      item.liveStatus.value = isLiving ? 2 : 1;
-      if (item.liveStatus.value == 2) {
-        // 只有正在直播时才查详细信息
-        var detail = await site.liveSite.getRoomDetail(roomId: item.roomId);
-        item.liveStartTime = detail.showTime;
-      } else {
-        item.liveStartTime = null;
-      }
-    } catch (e) {
-      Log.logPrint(e);
-      item.liveStatus.value = 0;
-      item.liveStartTime = null;
-    } finally {
-      updatedCount++;
-      if (updatedCount >= followList.length) {
+    final generation = _generation;
+    var completed = 0;
+    final snapshot = interleaveByPlatform(followList.toList());
+    final configurations = {
+      for (final item in snapshot)
+        item.siteId:
+            Sites.allSites[item.siteId]?.liveSite.statusConfigurationVersion
+    };
+    _refreshQueue.concurrency = getOptimalConcurrency();
+    final future = _refreshQueue.run(snapshot.map((item) => () async {
+          if (_closed || generation != _generation) return;
+          await updateLiveStatus(item,
+              automatic: automatic,
+              configurationVersion: configurations[item.siteId]);
+          if (!_closed && generation == _generation) updatedCount = ++completed;
+        }));
+    _refreshFuture = future.whenComplete(() {
+      _refreshFuture = null;
+      if (!_closed && generation == _generation) {
         filterData();
         updating.value = false;
       }
+    });
+    return _refreshFuture!;
+  }
+
+  Future<void> updateLiveStatus(
+    FollowUser item, {
+    bool automatic = false,
+    int? configurationVersion,
+  }) async {
+    final site = Sites.allSites[item.siteId]?.liveSite;
+    if (site == null) return;
+    final version = configurationVersion ?? site.statusConfigurationVersion;
+    bool current() =>
+        !_closed &&
+        site.statusConfigurationVersion == version &&
+        followList.any((room) => identical(room, item)) &&
+        identical(DBService.instance.followBox.get(item.id), item);
+    if (!current()) return;
+    try {
+      final status = await site.getRoomStatusCached(
+          roomId: item.roomId, automatic: automatic);
+      if (!current()) return;
+      item.liveStatus.value = status.live ? 2 : 1;
+      item.liveStartTime = status.live ? status.showTime : null;
+    } catch (e) {
+      Log.logPrint(e);
+      if (!current()) return;
+      item.liveStatus.value = 0;
+      item.liveStartTime = null;
     }
   }
 
@@ -430,8 +469,14 @@ class FollowService extends GetxService {
 
   @override
   void onClose() {
+    _closed = true;
+    _generation++;
+    _refreshQueue.pause();
+    _concurrencyWorker?.dispose();
+    WidgetsBinding.instance.removeObserver(this);
     updateTimer?.cancel();
     subscription?.cancel();
+    _updatedListController.close();
     super.onClose();
   }
 }

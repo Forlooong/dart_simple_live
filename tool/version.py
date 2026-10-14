@@ -92,7 +92,7 @@ def check_changes(root, app, base):
     if not re.fullmatch(r"[0-9a-fA-F]{40}", base):
         raise ValueError("Base must be a full Git commit SHA")
     directory, _ = APPS[app]
-    changed = git(root, "diff", "--name-only", base, "--", directory, "simple_live_core")
+    changed = git(root, "diff", "--name-only", base, "--", directory, "simple_live_core", "packages")
     if not changed.strip():
         return
     old = read_version(git(root, "show", f"{base}:{directory}/pubspec.yaml"))

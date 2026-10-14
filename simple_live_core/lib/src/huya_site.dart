@@ -13,7 +13,7 @@ import 'package:simple_live_core/src/model/tars/get_cdn_token_resp.dart';
 import 'package:simple_live_core/src/model/tars/huya_user_id.dart';
 import 'package:tars_dart/tars/net/base_tars_http.dart';
 
-class HuyaSite implements LiveSite {
+class HuyaSite extends LiveSite {
   static const baseUrl = "https://m.huya.com/";
   final String kUserAgent =
       "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.91 Mobile Safari/537.36 Edg/117.0.0.0";
@@ -528,6 +528,10 @@ class HuyaSite implements LiveSite {
     var roomInfo = await _getRoomInfo(roomId);
     return LiveStatusParser.huya(roomInfo);
   }
+
+  @override
+  Future<LiveRoomStatus> getRoomStatusSnapshot({required String roomId}) async =>
+      LiveRoomStatus(live: await getLiveStatus(roomId: roomId));
 
   /// 匿名登录获取uid
   Future<String> getAnonymousUid() async {

@@ -7,6 +7,8 @@ export 'src/bilibili_site.dart';
 export 'src/douyu_site.dart';
 export 'src/douyin_site.dart';
 export 'src/common/core_log.dart';
+export 'src/common/status_refresh.dart';
+export 'src/model/live_room_status.dart';
 export 'src/model/live_message.dart';
 export 'src/danmaku/bilibili_danmaku.dart';
 export 'src/danmaku/douyu_danmaku.dart';

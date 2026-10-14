@@ -1,4 +1,6 @@
 import 'dart:io';
+import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
+import 'package:simple_live_app/app/danmaku_rule_validation.dart';
 
 import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/log.dart';
@@ -151,7 +153,9 @@ class AppSettingsController extends GetxController {
         .getValue(LocalStorageService.kUpdateFollowDuration, 10);
 
     updateFollowThreadCount.value = LocalStorageService.instance
-        .getValue(LocalStorageService.kUpdateFollowThreadCount, 0);  // 默认 0 = 自动
+        .getValue<int>(LocalStorageService.kUpdateFollowThreadCount, 4);
+    updateFollowThreadCount.value = updateFollowThreadCount.value == 0
+        ? 4 : updateFollowThreadCount.value.clamp(1, 8);
 
     initSiteSort();
     initHomeSort();
@@ -381,6 +385,20 @@ class AppSettingsController extends GetxController {
   }
 
   RxSet<String> shieldList = <String>{}.obs;
+  Future<bool> addValidatedShieldRule(String value) async {
+    final error = await validateDanmakuRule(value);
+    if (error != null) {
+      SmartDialog.showToast(error);
+      return false;
+    }
+    if (shieldList.length >= 2000 && !shieldList.contains(value)) {
+      SmartDialog.showToast('最多支持 2000 条屏蔽规则，请先移除不需要的规则');
+      return false;
+    }
+    addShieldList(value);
+    return true;
+  }
+
   void addShieldList(String e) {
     shieldList.add(e);
     LocalStorageService.instance.shieldBox.put(e, e);
@@ -520,9 +538,9 @@ class AppSettingsController extends GetxController {
 
   var updateFollowThreadCount = 4.obs;
   void setUpdateFollowThreadCount(int e) {
-    updateFollowThreadCount.value = e;
+    updateFollowThreadCount.value = e == 0 ? 4 : e.clamp(1, 8);
     LocalStorageService.instance
-        .setValue(LocalStorageService.kUpdateFollowThreadCount, e);
+        .setValue(LocalStorageService.kUpdateFollowThreadCount, updateFollowThreadCount.value);
   }
 
   var playerForceHttps = false.obs;

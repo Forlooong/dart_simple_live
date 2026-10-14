@@ -99,6 +99,8 @@ class AppSettingsController extends GetxController {
 
     updateFollowThreadCount.value = LocalStorageService.instance
         .getValue(LocalStorageService.kUpdateFollowThreadCount, 4);
+    updateFollowThreadCount.value = updateFollowThreadCount.value == 0
+        ? 4 : updateFollowThreadCount.value.clamp(1, 8);
 
     super.onInit();
   }
@@ -330,8 +332,8 @@ class AppSettingsController extends GetxController {
 
   var updateFollowThreadCount = 4.obs;
   void setUpdateFollowThreadCount(int e) {
-    updateFollowThreadCount.value = e;
+    updateFollowThreadCount.value = e == 0 ? 4 : e.clamp(1, 8);
     LocalStorageService.instance
-        .setValue(LocalStorageService.kUpdateFollowThreadCount, e);
+        .setValue(LocalStorageService.kUpdateFollowThreadCount, updateFollowThreadCount.value);
   }
 }

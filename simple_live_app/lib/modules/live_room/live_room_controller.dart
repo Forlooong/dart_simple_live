@@ -19,6 +19,7 @@ import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/history.dart';
 import 'package:simple_live_app/modules/live_room/player/player_controller.dart';
+import 'package:simple_live_app/modules/live_room/chat_message_buffer.dart';
 import 'package:simple_live_app/modules/settings/danmu_settings_page.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/follow_service.dart';
@@ -58,6 +59,24 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   /// 聊天信息
   RxList<LiveMessage> messages = RxList<LiveMessage>();
+  final ChatMessageBuffer _chatBuffer = ChatMessageBuffer();
+  Timer? _messageFlushTimer;
+  Worker? _danmakuVisibilityWorker;
+  Worker? _filterRulesWorker;
+  bool _filterUpdating = false;
+  int _filterRevision = 0;
+  int? _pendingOnline;
+  final _pendingSuperChats = <LiveSuperChatMessage>[];
+  int _pendingSuperChatBytes = 0;
+  bool _superChatOverflowed = false;
+  bool _chatChanged = false;
+  bool _scrollScheduled = false;
+  bool _watchRegistered = false;
+  bool _danmakuReady = false;
+  final danmakuForeground = true.obs;
+
+  bool get danmakuEnabled =>
+      showDanmakuState.value && danmakuForeground.value && !playerClosing;
 
   /// 清晰度数据
   RxList<LivePlayQuality> qualites = RxList<LivePlayQuality>();
@@ -147,6 +166,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   @override
   void onInit() {
     WidgetsBinding.instance.addObserver(this);
+    if (Get.isRegistered<FollowService>()) {
+      FollowService.instance.beginWatching();
+      _watchRegistered = true;
+    }
     if (FollowService.instance.followList.isEmpty) {
       FollowService.instance.loadData();
     }
@@ -163,7 +186,119 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   void scrollListener() {
     if (scrollController.position.userScrollDirection ==
         ScrollDirection.forward) {
-      disableAutoScroll.value = true;
+      freezeChatHistory();
+    }
+  }
+
+  /// The visible RxList is already a bounded copy; stop publishing into it.
+  void freezeChatHistory() {
+    disableAutoScroll.value = true;
+  }
+
+  void showLatestMessages() {
+    if (playerClosing) return;
+    disableAutoScroll.value = false;
+    if (_filterUpdating || isBackground) {
+      _chatChanged = true;
+      return;
+    }
+    messages.value = _chatBuffer.latest.toList();
+    _chatBuffer.markPublished();
+    _chatChanged = false;
+    _scheduleChatScroll();
+  }
+
+  void _scheduleChatScroll() {
+    if (_scrollScheduled || isBackground || disableAutoScroll.value) return;
+    _scrollScheduled = true;
+    final generation = _roomGeneration;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollScheduled = false;
+      if (_isCurrentRoom(generation) && !isBackground) chatScrollToBottom();
+    });
+  }
+
+  void _scheduleMessageFlush() {
+    if (_messageFlushTimer != null ||
+        isBackground ||
+        playerClosing ||
+        _filterUpdating) {
+      return;
+    }
+    final generation = _roomGeneration;
+    _messageFlushTimer = Timer(const Duration(milliseconds: 50), () {
+      _messageFlushTimer = null;
+      if (!_isCurrentRoom(generation) || isBackground || _filterUpdating) {
+        return;
+      }
+      final batch = _chatBuffer.takeOverlay();
+      if (_chatChanged && !disableAutoScroll.value) {
+        messages.value = _chatBuffer.latest.toList();
+        _scheduleChatScroll();
+      }
+      if (!disableAutoScroll.value) _chatBuffer.clearPending();
+      _chatChanged = false;
+      if (liveStatus.value && danmakuEnabled) {
+        addDanmaku(batch
+            .map((message) => DanmakuContentItem(
+                  message.message,
+                  color: Color.fromARGB(
+                      255, message.color.r, message.color.g, message.color.b),
+                ))
+            .toList(growable: false));
+      }
+      if (_pendingOnline != null) {
+        online.value = _pendingOnline!;
+        _pendingOnline = null;
+      }
+      if (_pendingSuperChats.isNotEmpty) {
+        final now = DateTime.now();
+        final visible = superChats
+            .where((message) => message.endTime.isAfter(now))
+            .toList();
+        var bytes =
+            visible.fold(0, (sum, message) => sum + _superChatBytes(message));
+        for (final message in _pendingSuperChats) {
+          if (!message.endTime.isAfter(now)) continue;
+          final messageBytes = _superChatBytes(message);
+          if (bytes + messageBytes > 1024 * 1024) {
+            _handleSuperChatOverflow();
+            break;
+          }
+          visible.add(message);
+          bytes += messageBytes;
+        }
+        superChats.value = visible;
+        _pendingSuperChats.clear();
+        _pendingSuperChatBytes = 0;
+      }
+    });
+  }
+
+  void _queueChat(LiveMessage message, {bool overlay = true}) {
+    if (_chatBuffer.add(message,
+        overlay: overlay && liveStatus.value && danmakuEnabled,
+        filter: overlay)) {
+      _chatChanged = true;
+      _scheduleMessageFlush();
+    }
+  }
+
+  void _invalidateMessageBatch({bool clearHistory = false}) {
+    ++_filterRevision;
+    _filterUpdating = false;
+    _messageFlushTimer?.cancel();
+    _messageFlushTimer = null;
+    _chatBuffer.discardUnpublished();
+    _pendingOnline = null;
+    _pendingSuperChats.clear();
+    _pendingSuperChatBytes = 0;
+    _superChatOverflowed = false;
+    if (clearHistory) {
+      _chatBuffer.clear();
+      messages.clear();
+      _chatChanged = false;
+      disableAutoScroll.value = false;
     }
   }
 
@@ -238,9 +373,30 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   /// 初始化弹幕接收事件
   void initDanmau() {
+    _danmakuReady = false;
+    _danmakuVisibilityWorker ??= ever<bool>(showDanmakuState, (visible) {
+      danmakuController?.setEnabled(danmakuEnabled);
+      if (!visible) {
+        _chatBuffer.discardOverlay();
+        danmakuController?.clear();
+      }
+    });
     final generation = _roomGeneration;
+    _filterRulesWorker ??= ever<Set<String>>(
+      AppSettingsController.instance.shieldList,
+      (_) => _updateDanmakuFilter(),
+    );
     liveDanmaku.onMessage = (message) {
       if (_isCurrentRoom(generation)) onWSMessage(message);
+    };
+    liveDanmaku.onMessages = (batch) {
+      if (!_isCurrentRoom(generation)) return;
+      for (final message in batch) {
+        onWSMessage(message);
+      }
+    };
+    liveDanmaku.onDiagnostic = (diagnostic) {
+      if (_isCurrentRoom(generation)) addSysMsg(diagnostic);
     };
     liveDanmaku.onClose = (message) {
       if (_isCurrentRoom(generation)) onWSClose(message);
@@ -248,66 +404,99 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     liveDanmaku.onReady = () {
       if (_isCurrentRoom(generation)) onWSReady();
     };
+    unawaited(_updateDanmakuFilter());
+  }
+
+  Future<void> _updateDanmakuFilter() async {
+    final generation = _roomGeneration;
+    final revision = ++_filterRevision;
+    _filterUpdating = true;
+    _messageFlushTimer?.cancel();
+    _messageFlushTimer = null;
+    final rules = AppSettingsController.instance.shieldList.map((text) {
+      final regex = Utils.isRegexFormat(text);
+      return DanmakuFilterRule(
+        text: regex ? Utils.removeRegexFormat(text) : text,
+        regex: regex,
+      );
+    }).toList(growable: false);
+    try {
+      await liveDanmaku.updateFilterRules(rules);
+      if (!_isCurrentRoom(generation) || revision != _filterRevision) return;
+      final pending = _chatBuffer.unfilteredPending;
+      final accepted = await liveDanmaku.refilterMessages(pending);
+      if (!_isCurrentRoom(generation) || revision != _filterRevision) return;
+      _chatBuffer.applyFilterResult(pending, accepted);
+      _chatChanged = true;
+    } catch (error) {
+      if (_isCurrentRoom(generation) && revision == _filterRevision) {
+        _chatBuffer.applyFilterResult(_chatBuffer.unfilteredPending, const []);
+        _chatChanged = true;
+        addSysMsg('弹幕过滤规则加载失败：$error');
+      }
+    } finally {
+      if (_isCurrentRoom(generation) && revision == _filterRevision) {
+        _filterUpdating = false;
+        _scheduleMessageFlush();
+      }
+    }
   }
 
   /// 接收到WebSocket信息
   void onWSMessage(LiveMessage msg) {
     if (playerClosing) return;
     if (msg.type == LiveMessageType.chat) {
-      if (messages.length > 200 && !disableAutoScroll.value) {
-        messages.removeAt(0);
-      }
-
       // 关键词屏蔽检查
-      for (var keyword in AppSettingsController.instance.shieldList) {
-        Pattern? pattern;
-        if (Utils.isRegexFormat(keyword)) {
-          String removedSlash = Utils.removeRegexFormat(keyword);
-          try {
-            pattern = RegExp(removedSlash);
-          } catch (e) {
-            // should avoid this during add keyword
-            Log.d("关键词：$keyword 正则格式错误");
-          }
-        } else {
-          pattern = keyword;
-        }
-        if (pattern != null && msg.message.contains(pattern)) {
-          Log.d("关键词：$keyword\n已屏蔽消息内容：${msg.message}");
-          return;
-        }
-      }
-
-      messages.add(msg);
-
-      WidgetsBinding.instance.addPostFrameCallback((_) => chatScrollToBottom());
-      if (!liveStatus.value || isBackground) {
-        return;
-      }
-
-      addDanmaku([
-        DanmakuContentItem(
-          msg.message,
-          color: Color.fromARGB(255, msg.color.r, msg.color.g, msg.color.b),
-        ),
-      ]);
+      _queueChat(msg);
     } else if (msg.type == LiveMessageType.online) {
-      online.value = msg.data;
+      _pendingOnline = msg.data;
+      _scheduleMessageFlush();
     } else if (msg.type == LiveMessageType.superChat) {
-      superChats.add(msg.data);
+      _queueSuperChat(msg.data as LiveSuperChatMessage);
     }
+  }
+
+  int _superChatBytes(LiveSuperChatMessage message) =>
+      (message.userName.length +
+              message.message.length +
+              message.face.length +
+              message.backgroundColor.length +
+              message.backgroundBottomColor.length) *
+          2 +
+      256;
+
+  void _handleSuperChatOverflow() {
+    if (_superChatOverflowed) return;
+    _superChatOverflowed = true;
+    addSysMsg('醒目留言队列已达上限，弹幕连接已停止，请刷新直播间');
+    liveDanmaku.stop();
+  }
+
+  void _queueSuperChat(LiveSuperChatMessage message) {
+    if (_superChatOverflowed || !message.endTime.isAfter(DateTime.now())) {
+      return;
+    }
+    final bytes = _superChatBytes(message);
+    if (_pendingSuperChatBytes + bytes > 1024 * 1024) {
+      _handleSuperChatOverflow();
+      return;
+    }
+    _pendingSuperChats.add(message);
+    _pendingSuperChatBytes += bytes;
+    _scheduleMessageFlush();
   }
 
   /// 添加一条系统消息
   void addSysMsg(String msg) {
     if (playerClosing) return;
-    messages.add(
+    _queueChat(
       LiveMessage(
         type: LiveMessageType.chat,
         userName: "LiveSysMessage",
         message: msg,
         color: LiveMessageColor.white,
       ),
+      overlay: false,
     );
   }
 
@@ -318,6 +507,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   /// WebSocket准备就绪
   void onWSReady() {
+    if (_danmakuReady) {
+      _invalidateMessageBatch();
+      unawaited(_updateDanmakuFilter());
+    }
+    _danmakuReady = true;
     addSysMsg("弹幕服务器连接正常");
   }
 
@@ -325,6 +519,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   Future<void> loadData() async {
     if (playerClosing) return;
     final generation = ++_roomGeneration;
+    _invalidateMessageBatch();
     final requestedSite = site;
     final requestedRoom = roomId;
     _invalidatePlayback();
@@ -410,7 +605,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       }
       addSysMsg("开始连接弹幕服务器");
       initDanmau();
-      liveDanmaku.start(detail.value?.danmakuData);
+      unawaited(_startDanmaku(generation, detail.value?.danmakuData));
       startLiveDurationTimer(); // 启动开播时长定时器
     } catch (e, stack) {
       if (!_isCurrentRoom(generation)) return;
@@ -421,6 +616,17 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     } finally {
       if (_isCurrentRoom(generation)) {
         SmartDialog.dismiss(status: SmartStatus.loading);
+      }
+    }
+  }
+
+  Future<void> _startDanmaku(int generation, dynamic data) async {
+    try {
+      await liveDanmaku.start(data);
+    } catch (error) {
+      if (_isCurrentRoom(generation)) {
+        Log.logPrint(error);
+        addSysMsg('弹幕启动失败，请刷新直播间重试：$error');
       }
     }
   }
@@ -742,7 +948,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         roomId: detail.value!.roomId,
       );
       if (!_isCurrentRoom(generation)) return;
-      superChats.addAll(sc);
+      for (final message in sc) {
+        _queueSuperChat(message);
+      }
     } catch (e) {
       if (!_isCurrentRoom(generation)) return;
       Log.logPrint(e);
@@ -752,6 +960,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   /// 移除掉已到期的SC
   void removeSuperChats() async {
+    if (playerClosing || isBackground) return;
     var now = DateTime.now().millisecondsSinceEpoch;
     superChats.value = superChats
         .where((x) => x.endTime.millisecondsSinceEpoch > now)
@@ -995,16 +1204,17 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   void showDanmuShield() {
     TextEditingController keywordController = TextEditingController();
 
-    void addKeyword() {
+    void addKeyword() async {
       if (keywordController.text.isEmpty) {
         SmartDialog.showToast("请输入关键词");
         return;
       }
 
-      AppSettingsController.instance.addShieldList(
-        keywordController.text.trim(),
-      );
-      keywordController.text = "";
+      final rule = keywordController.text.trim();
+      if (await AppSettingsController.instance.addValidatedShieldRule(rule) &&
+          keywordController.text.trim() == rule) {
+        keywordController.text = "";
+      }
     }
 
     Utils.showBottomSheet(
@@ -1221,7 +1431,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
     // 清除全部消息
     liveDanmaku.stop();
-    messages.clear();
+    _invalidateMessageBatch(clearHistory: true);
     superChats.clear();
     danmakuController?.clear();
 
@@ -1254,21 +1464,29 @@ $errorStack''');
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    if (playerClosing) return;
+    if (playerClosing) {
+      danmakuController?.setEnabled(false);
+      return;
+    }
 
-    if (state == AppLifecycleState.paused) {
+    if (state != AppLifecycleState.resumed) {
       Log.d("进入后台");
       //进入后台，关闭弹幕
       danmakuController?.clear();
       isBackground = true;
+      danmakuForeground.value = false;
+      danmakuController?.setEnabled(false);
+      _messageFlushTimer?.cancel();
+      _messageFlushTimer = null;
+      _chatBuffer.discardOverlay();
     } else
     //返回前台
     if (state == AppLifecycleState.resumed) {
       Log.d("返回前台");
       isBackground = false;
-      // canvas_danmaku pauses itself in the background but does not auto-resume.
-      // Resume even when hidden, so manually enabling the overlay still works.
-      danmakuController?.resume();
+      danmakuForeground.value = true;
+      danmakuController?.setEnabled(danmakuEnabled);
+      _scheduleMessageFlush();
     }
   }
 
@@ -1306,6 +1524,14 @@ $errorStack''');
   @override
   void onClose() {
     ++_roomGeneration;
+    danmakuForeground.value = false;
+    _invalidateMessageBatch(clearHistory: true);
+    _danmakuVisibilityWorker?.dispose();
+    _filterRulesWorker?.dispose();
+    if (_watchRegistered && Get.isRegistered<FollowService>()) {
+      FollowService.instance.endWatching();
+      _watchRegistered = false;
+    }
     _invalidatePlayback();
     try {
       SmartDialog.dismiss(status: SmartStatus.loading);

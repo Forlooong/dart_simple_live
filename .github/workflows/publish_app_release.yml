@@ -12,8 +12,6 @@ jobs:
     steps:
       #签出代码
       - uses: actions/checkout@v4
-        with:
-          ref: master
 
       #APK签名设置
       - name: Download Android keystore
@@ -40,8 +38,12 @@ jobs:
       - name: Flutter action
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.38.x"
+          flutter-version: "3.38.10"
           cache: true
+      - name: Set up Rust native targets
+        uses: ./.github/actions/setup-native
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
 
       # 打开MAC Desktop支持
       - name: Enable Flutter Desktop
@@ -52,6 +54,7 @@ jobs:
         run: |
           cd simple_live_app
           flutter pub get
+      - uses: ./.github/actions/check-native
 
       # 安装appdmg npm install -g appdmg
       - name: Install appdmg
@@ -66,6 +69,7 @@ jobs:
         run: |
           cd simple_live_app
           flutter build apk --release --split-per-abi
+          python ../tool/verify_native_bundle.py android build/app/outputs/flutter-apk
 
       #上传APK至Artifacts
       - name: Upload APK to Artifacts
@@ -78,10 +82,13 @@ jobs:
             simple_live_app/build/app/outputs/flutter-apk/app-x86_64-release.apk
 
       #打包iOS
+      - name: Test native assets on iOS simulator
+        run: python tool/test_ios_native.py
       - name: Build IPA
         run: |
           cd simple_live_app
           flutter build ios --release --no-codesign
+          python ../tool/verify_native_bundle.py ios build/ios/iphoneos/Runner.app
 
       #创建未签名ipa
       - name: Create IPA
@@ -106,6 +113,7 @@ jobs:
         run: |
           cd simple_live_app
           flutter_distributor package --platform macos --targets dmg,zip --skip-clean
+          python ../tool/verify_native_bundle.py macos "build/macos/Build/Products/Release/Simple Live.app"
 
       # 上传MAC至Artifacts
       - name: Upload MacOS to Artifacts
@@ -149,14 +157,14 @@ jobs:
     steps:
       # 签出代码
       - uses: actions/checkout@v4
-        with:
-          ref: master
       # 设置Flutter环境
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.38.x"
+          flutter-version: "3.38.10"
           cache: true
+      - name: Set up Rust native targets
+        uses: ./.github/actions/setup-native
       # 安装依赖
       - name: Update apt-get
         run: sudo apt-get update
@@ -170,6 +178,7 @@ jobs:
         run: |
           cd simple_live_app
           flutter pub get
+      - uses: ./.github/actions/check-native
       # 设置flutter_distributor环境
       - name: Install flutter_distributor
         run: dart pub global activate flutter_distributor
@@ -178,6 +187,7 @@ jobs:
         run: |
           cd simple_live_app
           flutter_distributor package --platform linux --targets deb,zip --skip-clean
+          python ../tool/verify_native_bundle.py linux build/linux/x64/release/bundle
       # 上传Linux包至Artifacts
       - name: Upload Linux APP to Artifacts
         uses: actions/upload-artifact@v4
@@ -216,20 +226,21 @@ jobs:
     steps:
       # 签出代码
       - uses: actions/checkout@v4
-        with:
-          ref: master
       # 设置Flutter环境
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.38.x"
+          flutter-version: "3.38.10"
           cache: true
+      - name: Set up Rust native targets
+        uses: ./.github/actions/setup-native
       - name: Enable Flutter Desktop
         run: flutter config --enable-windows-desktop
       - name: Restore Packages
         run: |
           cd simple_live_app
           flutter pub get
+      - uses: ./.github/actions/check-native
       # 设置flutter_distributor环境
       - name: Install flutter_distributor
         run: dart pub global activate flutter_distributor
@@ -238,6 +249,7 @@ jobs:
         run: |
           cd simple_live_app
           flutter_distributor package --platform windows --targets msix,zip --skip-clean
+          python ../tool/verify_native_bundle.py windows build/windows/x64/runner/Release
 
       # 上传Windows至Artifacts
       - name: Upload Windows APP to Artifacts

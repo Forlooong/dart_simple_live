@@ -1,5 +1,5 @@
 name: app-build-action-tv
-run-name: "Release TV · 1.7.0+10605 · #${{ github.run_number }}"
+run-name: "Release TV · 1.7.1+10606 · #${{ github.run_number }}"
 
 on:
   push:
@@ -8,6 +8,8 @@ on:
     paths:
       - 'simple_live_tv_app/**'
       - 'simple_live_core/**'
+      - 'packages/**'
+      - '.github/actions/**'
       - 'tool/**'
       - '.github/workflows/fork_tv_apk.yml'
   workflow_dispatch:
@@ -47,8 +49,16 @@ jobs:
           flutter-version: '3.38.10'
           channel: stable
           cache: true
+      - name: Set up Rust native targets
+        uses: ./.github/actions/setup-native
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
       - name: Restore packages
         run: flutter pub get --enforce-lockfile
+      - uses: ./.github/actions/check-native
+
+      - name: Test TV danmaku batching and follow polling
+        run: flutter test --no-pub test/danmaku_batch_test.dart test/follow_refresh_test.dart
 
       - name: Configure APK signing
         id: signing
@@ -106,6 +116,8 @@ jobs:
 
       - name: Build release APKs
         run: flutter build apk --release --split-per-abi --no-pub
+      - name: Verify bundled native libraries and 16 KiB alignment
+        run: python ../tool/verify_native_bundle.py android build/app/outputs/flutter-apk
 
       - name: Verify APK signatures and prepare artifacts
         env:

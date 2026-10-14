@@ -16,10 +16,11 @@ import 'package:simple_live_core/src/model/live_search_result.dart';
 import 'package:simple_live_core/src/model/live_room_detail.dart';
 import 'package:simple_live_core/src/model/live_play_quality.dart';
 import 'package:simple_live_core/src/model/live_category_result.dart';
+import 'package:simple_live_core/src/model/live_room_status.dart';
 import 'package:html_unescape/html_unescape.dart';
 import 'package:simple_live_core/src/scripts/douyu_sign.dart';
 
-class DouyuSite implements LiveSite {
+class DouyuSite extends LiveSite {
   @override
   String id = "douyu";
 
@@ -365,6 +366,24 @@ class DouyuSite implements LiveSite {
   Future<bool> getLiveStatus({required String roomId}) async {
     var roomInfo = await _getRoomInfo(roomId);
     return LiveStatusParser.douyu(roomInfo);
+  }
+
+  @override
+  Future<LiveRoomStatus> getRoomStatusSnapshot({required String roomId}) async {
+    final room = await _getRoomInfo(roomId);
+    final live = LiveStatusParser.douyu(room);
+    if (!live) return const LiveRoomStatus(live: false);
+    // Status and start time do not need homeH5Enc or a signing JS runtime.
+    final result = await HttpClient.instance.getJson(
+      'https://www.douyu.com/swf_api/h5room/$roomId',
+      header: {
+        'referer': 'https://www.douyu.com/$roomId',
+        'user-agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+      },
+    );
+    return LiveRoomStatus(live: true,
+        showTime: result['data']?['show_time']?.toString());
   }
 
   int parseHotNum(String hn) {

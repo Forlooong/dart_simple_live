@@ -1,42 +1,10 @@
 import 'dart:async';
-
+import 'dart:math';
 import 'package:web_socket_channel/io.dart';
 
-enum SocketStatus {
-  connected,
-  failed,
-  closed,
-}
+enum SocketStatus { connected, failed, closed }
 
 class WebScoketUtils {
-  SocketStatus status = SocketStatus.closed;
-
-  /// 链接
-  final String url;
-
-  /// 备用链接
-  final String? backupUrl;
-
-  /// 心跳时间
-  final int heartBeatTime;
-
-  /// 接收到信息
-  final Function(dynamic)? onMessage;
-
-  /// 连接关闭
-  final Function(String msg)? onClose;
-
-  /// 尝试重连
-  final Function()? onReconnect;
-
-  /// 准备就绪
-  final Function()? onReady;
-
-  /// 心跳
-  final Function()? onHeartBeat;
-
-  /// 请求头
-  Map<String, dynamic>? headers;
   WebScoketUtils({
     required this.url,
     required this.heartBeatTime,
@@ -48,117 +16,111 @@ class WebScoketUtils {
     this.headers,
     this.backupUrl,
   });
+  final String url;
+  final String? backupUrl;
+  final int heartBeatTime;
+  final void Function(dynamic)? onMessage;
+  final void Function(String)? onClose;
+  final void Function()? onReconnect, onReady, onHeartBeat;
+  Map<String, dynamic>? headers;
+  SocketStatus status = SocketStatus.closed;
   IOWebSocketChannel? webSocket;
-  Timer? heartBeatTimer;
-
-  /// 重连次数
-  int reconnectTime = 0;
-  Timer? reconnectTimer;
-
-  /// 最大重连次数
-  int maxReconnectTime = 5;
-
   StreamSubscription<dynamic>? streamSubscription;
+  Timer? heartBeatTimer, reconnectTimer;
+  int reconnectTime = 0, maxReconnectTime = 5;
+  int _generation = 0;
+  bool _explicitlyClosed = true;
 
-  void connect({bool retry = false}) async {
-    close();
+  Future<void> connect({bool retry = false}) async {
+    _disconnect();
+    _explicitlyClosed = false;
+    final generation = ++_generation;
     try {
-      var wsurl = url;
-      if (backupUrl != null && backupUrl!.isNotEmpty && retry) {
-        wsurl = backupUrl!;
-      }
-      webSocket = IOWebSocketChannel.connect(
-        wsurl,
-        connectTimeout: Duration(seconds: 10),
+      final socket = IOWebSocketChannel.connect(
+        retry && backupUrl != null && backupUrl!.isNotEmpty ? backupUrl! : url,
+        connectTimeout: const Duration(seconds: 10),
         headers: headers,
       );
-
-      await webSocket?.ready;
-      ready();
-    } catch (e) {
-      if (!retry) {
-        connect(retry: true);
+      webSocket = socket;
+      await socket.ready;
+      if (_explicitlyClosed || generation != _generation) {
+        await socket.sink.close();
         return;
       }
-      onError(e, e);
+      status = SocketStatus.connected;
+      streamSubscription = socket.stream.listen(
+        (data) {
+          if (!_explicitlyClosed && generation == _generation)
+            onMessage?.call(data);
+        },
+        onError: (Object error, StackTrace stack) {
+          if (generation == _generation) _scheduleReconnect();
+        },
+        onDone: () {
+          if (generation == _generation) _scheduleReconnect();
+        },
+      );
+      onReady?.call();
+      if (!_explicitlyClosed &&
+          generation == _generation &&
+          heartBeatTime > 0) {
+        heartBeatTimer = Timer.periodic(Duration(milliseconds: heartBeatTime), (
+          _,
+        ) {
+          if (generation == _generation) onHeartBeat?.call();
+        });
+      }
+    } catch (error) {
+      if (!_explicitlyClosed && generation == _generation) _scheduleReconnect();
     }
   }
 
-  /// 连接完成
-  void ready() {
-    status = SocketStatus.connected;
-
-    streamSubscription = webSocket?.stream.listen(
-      (data) => receiveMessage(data),
-      onError: (e, s) => onError(e, s),
-      onDone: onDone,
-    );
-
-    onReady?.call();
-    initHeartBeat();
-  }
-
-  void initHeartBeat() {
-    heartBeatTimer = Timer.periodic(
-      Duration(milliseconds: heartBeatTime),
-      (timer) {
-        onHeartBeat?.call();
-      },
-    );
-  }
-
-  void receiveMessage(dynamic data) {
-    //接受到一条信息才算重连成功
-    reconnectTime = 0;
-    onMessage?.call(data);
-  }
-
-  void onError(e, s) {
+  void markValidPayload() => reconnectTime = 0;
+  void restartAfterProtocolError() => _scheduleReconnect();
+  void reconnect() => _scheduleReconnect();
+  void _scheduleReconnect() {
+    if (_explicitlyClosed || reconnectTimer != null) return;
+    ++_generation;
+    _disconnect();
     status = SocketStatus.failed;
-    onClose?.call(e.toString());
-  }
-
-  void onDone() {
-    if (status == SocketStatus.closed) {
+    if (reconnectTime >= maxReconnectTime) {
+      close();
+      onClose?.call('重连超过最大次数，与弹幕服务器断开连接');
       return;
     }
+    reconnectTime++;
     onReconnect?.call();
-    reconnect();
+    reconnectTimer = Timer(Duration(seconds: min(5 * reconnectTime, 30)), () {
+      reconnectTimer = null;
+      if (!_explicitlyClosed) unawaited(connect(retry: true));
+    });
   }
 
   void sendMessage(dynamic message) {
-    if (status == SocketStatus.connected) {
+    if (status == SocketStatus.connected && !_explicitlyClosed)
       webSocket?.sink.add(message);
-    }
+  }
+
+  void _disconnect() {
+    _ignoreTeardown(streamSubscription?.cancel());
+    streamSubscription = null;
+    reconnectTimer?.cancel();
+    reconnectTimer = null;
+    heartBeatTimer?.cancel();
+    heartBeatTimer = null;
+    _ignoreTeardown(webSocket?.sink.close());
+    webSocket = null;
+    status = SocketStatus.closed;
   }
 
   void close() {
-    status = SocketStatus.closed;
-
-    streamSubscription?.cancel();
-
-    reconnectTimer?.cancel();
-    reconnectTimer = null;
-
-    webSocket?.sink.close();
-
-    heartBeatTimer?.cancel();
-    heartBeatTimer = null;
+    _explicitlyClosed = true;
+    ++_generation;
+    _disconnect();
   }
 
-  void reconnect() {
-    status = SocketStatus.closed;
-    if (reconnectTime < maxReconnectTime) {
-      reconnectTime++;
-      reconnectTimer ??= Timer.periodic(Duration(seconds: 5), (timer) {
-        connect();
-      });
-    } else {
-      onClose?.call("重连超过最大次数，与服务器断开连接");
-      reconnectTimer?.cancel();
-      reconnectTimer = null;
-      close();
-      return;
-    }
+  void _ignoreTeardown(Future<dynamic>? task) {
+    if (task != null)
+      unawaited(task.then<void>((_) {}, onError: (Object _, StackTrace __) {}));
   }
 }

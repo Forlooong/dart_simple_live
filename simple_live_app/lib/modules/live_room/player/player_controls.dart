@@ -647,24 +647,12 @@ Widget buildControls(
 
 Widget buildDanmuView(VideoState videoState, LiveRoomController controller) {
   var padding = MediaQuery.of(videoState.context).padding;
-  controller.danmakuView ??= DanmakuScreen(
-    key: controller.globalDanmuKey,
-    createdController: controller.initDanmakuController,
-    option: DanmakuOption(
-      fontSize: AppSettingsController.instance.danmuSize.value,
-      area: AppSettingsController.instance.danmuArea.value,
-      duration: AppSettingsController.instance.danmuSpeed.value.toInt(),
-      opacity: AppSettingsController.instance.danmuOpacity.value,
-      //strokeWidth: AppSettingsController.instance.danmuStrokeWidth.value,
-      fontWeight: AppSettingsController.instance.danmuFontWeight.value,
-    ),
-  );
   return Positioned.fill(
     top: padding.top,
     bottom: padding.bottom,
     child: Obx(
       () => Offstage(
-        offstage: !controller.showDanmakuState.value,
+        offstage: !controller.danmakuEnabled,
         child: Padding(
           padding: controller.fullScreenState.value
               ? EdgeInsets.only(
@@ -673,7 +661,19 @@ Widget buildDanmuView(VideoState videoState, LiveRoomController controller) {
                       AppSettingsController.instance.danmuBottomMargin.value,
                 )
               : EdgeInsets.zero,
-          child: controller.danmakuView!,
+          child: DanmakuScreen(
+            key: controller.globalDanmuKey,
+            enabled: controller.danmakuEnabled,
+            createdController: controller.initDanmakuController,
+            option: DanmakuOption(
+              fontSize: AppSettingsController.instance.danmuSize.value,
+              area: AppSettingsController.instance.danmuArea.value,
+              duration: AppSettingsController.instance.danmuSpeed.value.toInt(),
+              opacity: AppSettingsController.instance.danmuOpacity.value,
+              //strokeWidth: AppSettingsController.instance.danmuStrokeWidth.value,
+              fontWeight: AppSettingsController.instance.danmuFontWeight.value,
+            ),
+          ),
         ),
       ),
     ),

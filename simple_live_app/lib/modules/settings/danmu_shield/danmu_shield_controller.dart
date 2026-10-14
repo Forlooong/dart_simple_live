@@ -8,14 +8,17 @@ class DanmuShieldController extends BaseController {
   final TextEditingController textEditingController = TextEditingController();
   final AppSettingsController settingsController =
       Get.find<AppSettingsController>();
-  void add() {
+  Future<void> add() async {
     if (textEditingController.text.isEmpty) {
       SmartDialog.showToast("请输入关键词");
       return;
     }
 
-    settingsController.addShieldList(textEditingController.text.trim());
-    textEditingController.text = "";
+    final rule = textEditingController.text.trim();
+    if (await settingsController.addValidatedShieldRule(rule) &&
+        textEditingController.text.trim() == rule) {
+      textEditingController.text = "";
+    }
   }
 
   void remove(String item) {

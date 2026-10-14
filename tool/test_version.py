@@ -77,6 +77,15 @@ class VersionTest(unittest.TestCase):
         version.check_changes(self.root, "main", self.base)
         version.check_changes(self.root, "tv", self.base)
 
+    def test_shared_renderer_change_requires_both_apps_to_bump(self):
+        self.change("packages/canvas_danmaku/lib/canvas_danmaku.dart")
+        for app in ("main", "tv"):
+            with self.assertRaisesRegex(ValueError, f"{app} source changed"):
+                version.check_changes(self.root, app, self.base)
+        version.update_versions(self.root, ("main", "tv"), bump=True)
+        for app in ("main", "tv"):
+            version.check_changes(self.root, app, self.base)
+
     def test_stale_workflow_title_fails(self):
         self.change(".github/workflows/fork_ios.yml", 'run-name: "Release iOS · 1.12.3"\n')
         with self.assertRaisesRegex(ValueError, "fork_ios.yml"):

@@ -1,4 +1,6 @@
 import 'package:simple_live_core/src/model/live_anchor_item.dart';
+import '../common/status_refresh.dart';
+import '../model/live_room_status.dart';
 
 import '../interface/live_danmaku.dart';
 import '../model/live_category_result.dart';
@@ -12,6 +14,30 @@ import '../model/live_play_quality.dart';
 import '../model/live_room_item.dart';
 
 class LiveSite {
+  final _statusCache = LiveRoomStatusCache();
+  int _statusConfigurationVersion = 0;
+  int get statusConfigurationVersion => _statusConfigurationVersion;
+
+  /// Call when credentials or other status-query configuration changes.
+  void invalidateStatusCache() {
+    _statusConfigurationVersion++;
+    _statusCache.clear();
+  }
+
+  Future<LiveRoomStatus> getRoomStatusCached({
+    required String roomId,
+    bool automatic = false,
+  }) => _statusCache.get(
+    roomId,
+    statusConfigurationVersion,
+    () => getRoomStatusSnapshot(roomId: roomId),
+    automatic: automatic,
+  );
+
+  Future<LiveRoomStatus> getRoomStatusSnapshot({
+    required String roomId,
+  }) async => LiveRoomStatus(live: await getLiveStatus(roomId: roomId));
+
   /// 站点唯一ID
   String id = "";
 
@@ -29,51 +55,62 @@ class LiveSite {
   /// 搜索直播间
   Future<LiveSearchRoomResult> searchRooms(String keyword, {int page = 1}) {
     return Future.value(
-        LiveSearchRoomResult(hasMore: false, items: <LiveRoomItem>[]));
+      LiveSearchRoomResult(hasMore: false, items: <LiveRoomItem>[]),
+    );
   }
 
   /// 搜索直播间
   Future<LiveSearchAnchorResult> searchAnchors(String keyword, {int page = 1}) {
     return Future.value(
-        LiveSearchAnchorResult(hasMore: false, items: <LiveAnchorItem>[]));
+      LiveSearchAnchorResult(hasMore: false, items: <LiveAnchorItem>[]),
+    );
   }
 
   /// 读取类目下房间
-  Future<LiveCategoryResult> getCategoryRooms(LiveSubCategory category,
-      {int page = 1}) {
+  Future<LiveCategoryResult> getCategoryRooms(
+    LiveSubCategory category, {
+    int page = 1,
+  }) {
     return Future.value(
-        LiveCategoryResult(hasMore: false, items: <LiveRoomItem>[]));
+      LiveCategoryResult(hasMore: false, items: <LiveRoomItem>[]),
+    );
   }
 
   /// 读取推荐的房间
   Future<LiveCategoryResult> getRecommendRooms({int page = 1}) {
     return Future.value(
-        LiveCategoryResult(hasMore: false, items: <LiveRoomItem>[]));
+      LiveCategoryResult(hasMore: false, items: <LiveRoomItem>[]),
+    );
   }
 
   /// 读取房间详情
   Future<LiveRoomDetail> getRoomDetail({required String roomId}) {
-    return Future.value(LiveRoomDetail(
-      cover: '',
-      online: 0,
-      roomId: '',
-      status: false,
-      title: '',
-      url: '',
-      userAvatar: '',
-      userName: '',
-    ));
+    return Future.value(
+      LiveRoomDetail(
+        cover: '',
+        online: 0,
+        roomId: '',
+        status: false,
+        title: '',
+        url: '',
+        userAvatar: '',
+        userName: '',
+      ),
+    );
   }
 
   /// 读取房间清晰度
-  Future<List<LivePlayQuality>> getPlayQualites(
-      {required LiveRoomDetail detail}) {
+  Future<List<LivePlayQuality>> getPlayQualites({
+    required LiveRoomDetail detail,
+  }) {
     return Future.value(<LivePlayQuality>[]);
   }
 
   /// 读取播放链接
-  Future<LivePlayUrl> getPlayUrls(
-      {required LiveRoomDetail detail, required LivePlayQuality quality}) {
+  Future<LivePlayUrl> getPlayUrls({
+    required LiveRoomDetail detail,
+    required LivePlayQuality quality,
+  }) {
     return Future.value(LivePlayUrl(urls: []));
   }
 
@@ -83,8 +120,9 @@ class LiveSite {
   }
 
   /// 读取指定房间的SC
-  Future<List<LiveSuperChatMessage>> getSuperChatMessage(
-      {required String roomId}) {
+  Future<List<LiveSuperChatMessage>> getSuperChatMessage({
+    required String roomId,
+  }) {
     return Future.value([]);
   }
 }

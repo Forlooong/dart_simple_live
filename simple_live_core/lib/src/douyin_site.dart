@@ -7,7 +7,7 @@ import 'package:simple_live_core/src/common/http_client.dart';
 import 'package:simple_live_core/src/common/live_status_parser.dart';
 import 'package:simple_live_core/src/scripts/douyin_sign.dart';
 
-class DouyinSite implements LiveSite {
+class DouyinSite extends LiveSite {
   @override
   String id = "douyin";
 
@@ -31,7 +31,13 @@ class DouyinSite implements LiveSite {
       "ttwid=1%7CB1qls3GdnZhUov9o2NxOMxxYS2ff6OSvEWbv0ytbES4%7C1680522049%7C280d802d6d478e3e78d0c807f7c487e7ffec0ae4e5fdd6a0fe74c3c6af149511";
 
   /// 用户设置的 cookie
-  String cookie = "";
+  String _cookie = "";
+  String get cookie => _cookie;
+  set cookie(String value) {
+    if (_cookie == value) return;
+    _cookie = value;
+    invalidateStatusCache();
+  }
 
   void _logDebug(String msg) {
     // 同时使用 print 和 CoreLog 确保日志输出
@@ -749,8 +755,29 @@ class DouyinSite implements LiveSite {
 
   @override
   Future<bool> getLiveStatus({required String roomId}) async {
-    var result = await getRoomDetail(roomId: roomId);
-    return result.status;
+    return (await getRoomStatusSnapshot(roomId: roomId)).live;
+  }
+
+  @override
+  Future<LiveRoomStatus> getRoomStatusSnapshot({required String roomId}) async {
+    var webRid = roomId;
+    if (roomId.length > 16) {
+      final data = await _getRoomDataByRoomId(roomId);
+      final room = data['data']['room'];
+      final status = LiveStatusParser.douyinStatusCode(room);
+      if (status != 4) return LiveRoomStatus(live: status == 2);
+      webRid = room['owner']['web_rid'].toString();
+    }
+    try {
+      final data = await _getRoomDataByApi(webRid);
+      return LiveRoomStatus(
+          live: LiveStatusParser.douyinStatusCode(data['data'][0]) == 2);
+    } catch (_) {
+      final data = await _getRoomDataByHtml(webRid);
+      return LiveRoomStatus(
+          live: LiveStatusParser.douyinStatusCode(
+                  data['roomStore']['roomInfo']['room']) == 2);
+    }
   }
 
   @override

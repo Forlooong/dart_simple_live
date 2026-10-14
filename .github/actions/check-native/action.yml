@@ -1,0 +1,25 @@
+name: Verify native danmaku
+description: Run protocol, FFI loading, regex and polling regressions on the build host.
+runs:
+  using: composite
+  steps:
+    - name: Test native packaging checks
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: python -B -m unittest discover -s tool -p test_native_bundle.py
+    - name: Test Rust protocol and filtering limits
+      shell: bash
+      working-directory: simple_live_core/packages/danmaku_native/rust
+      run: cargo test --locked
+    - name: Test native library loading and Dart integration
+      shell: bash
+      working-directory: simple_live_core
+      run: |
+        dart pub get
+        dart test test/native_danmaku_test.dart test/native_danmaku_lifecycle_test.dart test/web_socket_lifecycle_test.dart test/status_refresh_test.dart test/room_status_snapshot_test.dart
+    - name: Test idle and hidden renderer lifecycle
+      shell: bash
+      working-directory: packages/canvas_danmaku
+      run: |
+        flutter pub get
+        flutter test --no-pub test/lifecycle_test.dart

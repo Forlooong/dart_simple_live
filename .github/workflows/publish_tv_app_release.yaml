@@ -12,8 +12,6 @@ jobs:
     steps:
       #签出代码
       - uses: actions/checkout@v4
-        with:
-          ref: master
 
       #APK签名设置
       - name: Download Android keystore
@@ -40,20 +38,26 @@ jobs:
       - name: Flutter action
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.38.x"
+          flutter-version: "3.38.10"
           cache: true
+      - name: Set up Rust native targets
+        uses: ./.github/actions/setup-native
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
 
       #更新Flutter的packages
       - name: Restore packages
         run: |
           cd simple_live_tv_app
           flutter pub get
+      - uses: ./.github/actions/check-native
 
       #打包APK
       - name: Build APK
         run: |
           cd simple_live_tv_app
           flutter build apk --release --split-per-abi
+          python ../tool/verify_native_bundle.py android build/app/outputs/flutter-apk
 
       #上传APK至Artifacts
       - name: Upload APK to Artifacts

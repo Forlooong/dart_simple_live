@@ -30,7 +30,7 @@ Widget buildControls(VideoState videoState, LiveRoomController controller) {
       ),
       Center(
         child: // 中间
-            StreamBuilder(
+        StreamBuilder(
           stream: videoState.widget.controller.player.stream.buffering,
           initialData: videoState.widget.controller.player.state.buffering,
           builder: (_, s) => Visibility(
@@ -52,7 +52,8 @@ Widget buildControls(VideoState videoState, LiveRoomController controller) {
         () => AnimatedPositioned(
           left: 0,
           right: 0,
-          top: (controller.showControlsState.value &&
+          top:
+              (controller.showControlsState.value &&
                   !controller.lockControlsState.value)
               ? 0
               : -200.w,
@@ -109,7 +110,8 @@ Widget buildControls(VideoState videoState, LiveRoomController controller) {
         () => AnimatedPositioned(
           left: 0,
           right: 0,
-          bottom: (controller.showControlsState.value &&
+          bottom:
+              (controller.showControlsState.value &&
                   !controller.lockControlsState.value)
               ? 0
               : -300.w,
@@ -215,22 +217,12 @@ Widget buildControls(VideoState videoState, LiveRoomController controller) {
 
 Widget buildDanmuView(VideoState videoState, LiveRoomController controller) {
   var padding = MediaQuery.of(videoState.context).padding;
-  controller.danmakuView ??= DanmakuScreen(
-    key: controller.globalDanmuKey,
-    createdController: controller.initDanmakuController,
-    option: DanmakuOption(
-      fontSize: AppSettingsController.instance.danmuSize.value.w,
-      area: AppSettingsController.instance.danmuArea.value,
-      duration: AppSettingsController.instance.danmuSpeed.value.toInt(),
-      opacity: AppSettingsController.instance.danmuOpacity.value,
-    ),
-  );
   return Positioned.fill(
     top: padding.top,
     bottom: padding.bottom,
     child: Obx(
       () => Offstage(
-        offstage: !controller.showDanmakuState.value,
+        offstage: !controller.danmakuEnabled,
         child: Padding(
           padding: controller.fullScreenState.value
               ? EdgeInsets.only(
@@ -239,7 +231,17 @@ Widget buildDanmuView(VideoState videoState, LiveRoomController controller) {
                       AppSettingsController.instance.danmuBottomMargin.value,
                 )
               : EdgeInsets.zero,
-          child: controller.danmakuView!,
+          child: DanmakuScreen(
+            key: controller.globalDanmuKey,
+            enabled: controller.danmakuEnabled,
+            createdController: controller.initDanmakuController,
+            option: DanmakuOption(
+              fontSize: AppSettingsController.instance.danmuSize.value.w,
+              area: AppSettingsController.instance.danmuArea.value,
+              duration: AppSettingsController.instance.danmuSpeed.value.toInt(),
+              opacity: AppSettingsController.instance.danmuOpacity.value,
+            ),
+          ),
         ),
       ),
     ),
@@ -620,7 +622,8 @@ void showFollowUser(LiveRoomController controller) {
               focusNode: AppFocusNode(),
               iconData: Icons.arrow_back,
               text: "返回",
-              autofocus: currentIndex == 0 &&
+              autofocus:
+                  currentIndex == 0 &&
                   FollowUserService.instance.livingList.isEmpty,
               onTap: () {
                 // Utils.hideRightDialog();

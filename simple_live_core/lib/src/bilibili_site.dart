@@ -16,15 +16,22 @@ import 'package:simple_live_core/src/model/live_search_result.dart';
 import 'package:simple_live_core/src/model/live_room_detail.dart';
 import 'package:simple_live_core/src/model/live_play_quality.dart';
 import 'package:simple_live_core/src/model/live_category_result.dart';
+import 'package:simple_live_core/src/model/live_room_status.dart';
 
-class BiliBiliSite implements LiveSite {
+class BiliBiliSite extends LiveSite {
   @override
   String id = "bilibili";
 
   @override
   String name = "哔哩哔哩直播";
 
-  String cookie = "";
+  String _cookie = "";
+  String get cookie => _cookie;
+  set cookie(String value) {
+    if (_cookie == value) return;
+    _cookie = value;
+    invalidateStatusCache();
+  }
   int userId = 0;
 
   @override
@@ -313,7 +320,6 @@ class BiliBiliSite implements LiveSite {
       queryParameters: queryParams,
       header: await getHeader(),
     );
-    print("【B站接口返回】roomId=$roomId, result=$result");
     return result["data"];
   }
 
@@ -396,6 +402,17 @@ class BiliBiliSite implements LiveSite {
       header: await getHeader(),
     );
     return LiveStatusParser.bilibili(result);
+  }
+
+  @override
+  Future<LiveRoomStatus> getRoomStatusSnapshot({required String roomId}) async {
+    final data = await getRoomInfo(roomId: roomId);
+    final room = data['room_info'];
+    final live = LiveStatusParser.bilibili({'data': room});
+    return LiveRoomStatus(
+      live: live,
+      showTime: live ? room['live_start_time']?.toString() : null,
+    );
   }
 
   @override

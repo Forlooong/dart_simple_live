@@ -135,7 +135,6 @@ mixin PlayerStateMixin on PlayerMixin {
   /// 是否为竖屏直播间
   var isVertical = false.obs;
 
-  Widget? danmakuView;
 
   var showQualites = false.obs;
   var showLines = false.obs;

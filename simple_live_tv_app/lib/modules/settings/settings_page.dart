@@ -270,8 +270,6 @@ class SettingsPage extends GetView<SettingsController> {
               4: "4",
               6: "6",
               8: "8",
-              10: "10",
-              12: "12",
             },
             value: AppSettingsController.instance.updateFollowThreadCount.value,
             onChanged: (e) {

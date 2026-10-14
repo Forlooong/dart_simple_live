@@ -6,7 +6,6 @@ import 'package:simple_live_app/services/follow_service.dart';
 import 'package:simple_live_app/widgets/settings/settings_action.dart';
 import 'package:simple_live_app/widgets/settings/settings_card.dart';
 import 'package:simple_live_app/widgets/settings/settings_switch.dart';
-import 'dart:io';
 
 class FollowSettingsPage extends GetView<AppSettingsController> {
   const FollowSettingsPage({super.key});
@@ -56,13 +55,12 @@ class FollowSettingsPage extends GetView<AppSettingsController> {
                 Obx(
                   () {
                     var threadCount = controller.updateFollowThreadCount.value;
-                    var displayValue = threadCount == 0
-                        ? "自动 (根据 CPU 核心数)"
-                        : "$threadCount";
+                    var displayValue =
+                        threadCount == 0 ? "默认 (4)" : "$threadCount";
 
                     return SettingsAction(
                       title: "更新并发数",
-                      subtitle: "0 = 自动根据 CPU 核心数优化（推荐），或手动设置 1-20",
+                      subtitle: "默认 4，可设置 1–8；观看直播时最多 2",
                       value: displayValue,
                       onTap: () {
                         showConcurrencyDialog();
@@ -105,8 +103,6 @@ class FollowSettingsPage extends GetView<AppSettingsController> {
 
   void showConcurrencyDialog() {
     var currentValue = controller.updateFollowThreadCount.value;
-    var cpuCount = Platform.numberOfProcessors;
-    var autoValue = (cpuCount * 2.5).round().clamp(4, 20);
 
     Get.dialog(
       AlertDialog(
@@ -115,13 +111,9 @@ class FollowSettingsPage extends GetView<AppSettingsController> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              "CPU 核心数: $cpuCount",
-              style: const TextStyle(fontSize: 12, color: Colors.grey),
-            ),
-            Text(
-              "自动推荐值: $autoValue",
-              style: const TextStyle(fontSize: 12, color: Colors.grey),
+            const Text(
+              "默认 4；观看直播时最多 2",
+              style: TextStyle(fontSize: 12, color: Colors.grey),
             ),
             const SizedBox(height: 16),
             const Text(
@@ -134,12 +126,10 @@ class FollowSettingsPage extends GetView<AppSettingsController> {
               spacing: 8,
               runSpacing: 8,
               children: [
-                _buildQuickOption(0, "自动 ($autoValue)", currentValue),
+                _buildQuickOption(1, "1", currentValue),
+                _buildQuickOption(2, "2", currentValue),
                 _buildQuickOption(4, "4", currentValue),
                 _buildQuickOption(8, "8", currentValue),
-                _buildQuickOption(12, "12", currentValue),
-                _buildQuickOption(16, "16", currentValue),
-                _buildQuickOption(20, "20", currentValue),
               ],
             ),
             const SizedBox(height: 16),
@@ -147,13 +137,13 @@ class FollowSettingsPage extends GetView<AppSettingsController> {
             TextField(
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(
-                labelText: "自定义 (1-20)",
+                labelText: "自定义 (1–8)",
                 border: OutlineInputBorder(),
-                hintText: "输入 1-20 之间的数字",
+                hintText: "输入 1–8 之间的数字",
               ),
               onSubmitted: (value) {
                 var num = int.tryParse(value);
-                if (num != null && num >= 0 && num <= 20) {
+                if (num != null && num >= 1 && num <= 8) {
                   controller.setUpdateFollowThreadCount(num);
                   Get.back();
                 }

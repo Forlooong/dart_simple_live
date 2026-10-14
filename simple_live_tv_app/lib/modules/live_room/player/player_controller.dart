@@ -88,7 +88,6 @@ mixin PlayerStateMixin on PlayerMixin {
   /// 自动隐藏提示计时器
   Timer? hideSeekTipTimer;
 
-  Widget? danmakuView;
 
   var showQualites = false.obs;
   var showLines = false.obs;

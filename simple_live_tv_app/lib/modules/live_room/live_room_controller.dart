@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 
 import 'package:canvas_danmaku/models/danmaku_content_item.dart';
 import 'package:flutter/material.dart';
@@ -22,10 +23,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   final Site pSite;
   final String pRoomId;
   late LiveDanmaku liveDanmaku;
-  LiveRoomController({
-    required this.pSite,
-    required this.pRoomId,
-  }) {
+  LiveRoomController({required this.pSite, required this.pRoomId}) {
     rxSite = pSite.obs;
     rxRoomId = pRoomId.obs;
     liveDanmaku = site.liveSite.getDanmaku();
@@ -40,6 +38,88 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   var online = 0.obs;
   var followed = false.obs;
   var liveStatus = false.obs;
+  final danmakuForeground = true.obs;
+  final _pendingMessages = ListQueue<LiveMessage>();
+  int _pendingBytes = 0;
+  int droppedDanmakuMessages = 0;
+  int? _pendingOnline;
+  String? _pendingDiagnostic;
+  int _roomGeneration = 0;
+  bool _closing = false;
+  bool _watchRegistered = false;
+  bool _danmakuReady = false;
+  Timer? _messageFlushTimer;
+  Timer? _clockTimer;
+  Worker? _danmakuVisibilityWorker;
+  Worker? _filterRulesWorker;
+  int _filterRevision = 0;
+  bool _filterUpdating = false;
+
+  bool get danmakuEnabled =>
+      showDanmakuState.value && danmakuForeground.value && !_closing;
+
+  int _messageBytes(LiveMessage message) =>
+      (message.message.length + message.userName.length) * 2 + 128;
+
+  void _clearPendingMessages() {
+    _pendingMessages.clear();
+    _pendingBytes = 0;
+  }
+
+  void _invalidateMessages() {
+    ++_filterRevision;
+    _filterUpdating = false;
+    _messageFlushTimer?.cancel();
+    _messageFlushTimer = null;
+    _clearPendingMessages();
+    _pendingOnline = null;
+    _pendingDiagnostic = null;
+  }
+
+  void _scheduleMessageFlush() {
+    if (_messageFlushTimer != null ||
+        isBackground ||
+        _closing ||
+        _filterUpdating) {
+      return;
+    }
+    final generation = _roomGeneration;
+    _messageFlushTimer = Timer(const Duration(milliseconds: 50), () {
+      _messageFlushTimer = null;
+      if (_closing ||
+          generation != _roomGeneration ||
+          isBackground ||
+          _filterUpdating) {
+        return;
+      }
+      if (liveStatus.value && danmakuEnabled) {
+        addDanmaku(
+          _pendingMessages
+              .map(
+                (message) => DanmakuContentItem(
+                  message.message,
+                  color: Color.fromARGB(
+                    255,
+                    message.color.r,
+                    message.color.g,
+                    message.color.b,
+                  ),
+                ),
+              )
+              .toList(growable: false),
+        );
+      }
+      _clearPendingMessages();
+      if (_pendingOnline != null) {
+        online.value = _pendingOnline!;
+        _pendingOnline = null;
+      }
+      if (_pendingDiagnostic != null) {
+        SmartDialog.showToast(_pendingDiagnostic!);
+        _pendingDiagnostic = null;
+      }
+    });
+  }
 
   /// 清晰度数据
   RxList<LivePlayQuality> qualites = RxList<LivePlayQuality>();
@@ -63,7 +143,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   var datetime = "00:00".obs;
 
   void initTimer() {
-    Timer.periodic(const Duration(seconds: 1), (timer) {
+    _clockTimer?.cancel();
+    _clockTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       var now = DateTime.now();
       datetime.value =
           "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
@@ -78,6 +159,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   @override
   void onInit() {
+    WidgetsBinding.instance.addObserver(this);
+    if (Get.isRegistered<FollowUserService>()) {
+      FollowUserService.instance.beginWatching();
+      _watchRegistered = true;
+    }
     initTimer();
     showDanmakuState.value = AppSettingsController.instance.danmuEnable.value;
     followed.value = DBService.instance.getFollowExist("${site.id}_$roomId");
@@ -97,44 +183,122 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   /// 初始化弹幕接收事件
   void initDanmau() {
-    liveDanmaku.onMessage = onWSMessage;
+    _danmakuReady = false;
+    _danmakuVisibilityWorker ??= ever<bool>(showDanmakuState, (visible) {
+      danmakuController?.setEnabled(danmakuEnabled);
+      if (!visible) {
+        _clearPendingMessages();
+        danmakuController?.clear();
+      }
+    });
+    final generation = _roomGeneration;
+    liveDanmaku.onReady = () {
+      if (_closing || generation != _roomGeneration) return;
+      if (_danmakuReady) {
+        _invalidateMessages();
+        unawaited(_updateDanmakuFilter());
+      }
+      _danmakuReady = true;
+    };
+    liveDanmaku.onMessage = (message) {
+      if (!_closing && generation == _roomGeneration) onWSMessage(message);
+    };
+    liveDanmaku.onMessages = (batch) {
+      if (_closing || generation != _roomGeneration) return;
+      for (final message in batch) {
+        onWSMessage(message);
+      }
+    };
+    liveDanmaku.onDiagnostic = (diagnostic) {
+      if (_closing || generation != _roomGeneration) return;
+      _reportDanmakuDiagnostic(diagnostic);
+    };
+    _filterRulesWorker ??= ever<Set<String>>(
+      AppSettingsController.instance.shieldList,
+      (_) => _updateDanmakuFilter(),
+    );
+    unawaited(_updateDanmakuFilter());
+  }
+
+  Future<void> _updateDanmakuFilter() async {
+    final generation = _roomGeneration;
+    final revision = ++_filterRevision;
+    _filterUpdating = true;
+    _messageFlushTimer?.cancel();
+    _messageFlushTimer = null;
+    final rules = AppSettingsController.instance.shieldList.map((text) {
+      final regex = Utils.isRegexFormat(text);
+      return DanmakuFilterRule(
+        text: regex ? Utils.removeRegexFormat(text) : text,
+        regex: regex,
+      );
+    }).toList(growable: false);
+    try {
+      await liveDanmaku.updateFilterRules(rules);
+      if (_closing ||
+          generation != _roomGeneration ||
+          revision != _filterRevision) {
+        return;
+      }
+      final pending = _pendingMessages.toList(growable: false);
+      final accepted = await liveDanmaku.refilterMessages(pending);
+      if (_closing ||
+          generation != _roomGeneration ||
+          revision != _filterRevision) {
+        return;
+      }
+      final rejected = pending.toSet()..removeAll(accepted);
+      _pendingMessages.removeWhere(rejected.contains);
+      _pendingBytes = _pendingMessages.fold(
+          0, (sum, message) => sum + _messageBytes(message));
+    } catch (error) {
+      if (!_closing &&
+          generation == _roomGeneration &&
+          revision == _filterRevision) {
+        _clearPendingMessages();
+        _reportDanmakuDiagnostic('弹幕过滤规则加载失败：$error');
+      }
+    } finally {
+      if (!_closing &&
+          generation == _roomGeneration &&
+          revision == _filterRevision) {
+        _filterUpdating = false;
+        _scheduleMessageFlush();
+      }
+    }
+  }
+
+  void _reportDanmakuDiagnostic(String diagnostic) {
+    Log.w(diagnostic);
+    _pendingDiagnostic =
+        diagnostic.length > 4096 ? diagnostic.substring(0, 4096) : diagnostic;
+    _scheduleMessageFlush();
   }
 
   /// 接收到WebSocket信息
   void onWSMessage(LiveMessage msg) {
+    if (_closing) return;
     if (msg.type == LiveMessageType.chat) {
       // 关键词屏蔽检查
-      for (var keyword in AppSettingsController.instance.shieldList) {
-        Pattern? pattern;
-        if (Utils.isRegexFormat(keyword)) {
-          String removedSlash = Utils.removeRegexFormat(keyword);
-          try {
-            pattern = RegExp(removedSlash);
-          } catch (e) {
-            // should avoid this during add keyword
-            Log.d("关键词：$keyword 正则格式错误");
-          }
-        } else {
-          pattern = keyword;
-        }
-        if (pattern != null && msg.message.contains(pattern)) {
-          Log.d("关键词：$keyword\n已屏蔽消息内容：${msg.message}");
-          return;
-        }
-      }
-
-      if (!liveStatus.value || isBackground) {
+      if (!liveStatus.value || !danmakuEnabled) {
         return;
       }
 
-      addDanmaku([
-        DanmakuContentItem(
-          msg.message,
-          color: Color.fromARGB(255, msg.color.r, msg.color.g, msg.color.b),
-        ),
-      ]);
+      final bytes = _messageBytes(msg);
+      if (bytes > 1024 * 1024) {
+        droppedDanmakuMessages++;
+        return;
+      }
+      _pendingMessages.addLast(msg);
+      _pendingBytes += bytes;
+      while (_pendingMessages.length > 200 || _pendingBytes > 1024 * 1024) {
+        _pendingBytes -= _messageBytes(_pendingMessages.removeFirst());
+        droppedDanmakuMessages++;
+      }
+      _scheduleMessageFlush();
     } else if (msg.type == LiveMessageType.online) {
-      online.value = msg.data;
+      _pendingOnline = msg.data;
+      _scheduleMessageFlush();
     } else if (msg.type == LiveMessageType.superChat) {
       //superChats.add(msg.data);
     }
@@ -142,10 +306,15 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   /// 加载直播间信息
   void loadData() async {
+    if (_closing) return;
+    final generation = ++_roomGeneration;
+    _invalidateMessages();
     try {
       SmartDialog.showLoading(msg: "");
       pageLoadding.value = true;
-      detail.value = await site.liveSite.getRoomDetail(roomId: roomId);
+      final roomDetail = await site.liveSite.getRoomDetail(roomId: roomId);
+      if (_closing || generation != _roomGeneration) return;
+      detail.value = roomDetail;
 
       addHistory();
       online.value = detail.value!.online;
@@ -158,12 +327,26 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       }
 
       initDanmau();
-      liveDanmaku.start(detail.value?.danmakuData);
+      unawaited(_startDanmaku(generation, detail.value?.danmakuData));
     } catch (e) {
+      if (_closing || generation != _roomGeneration) return;
       SmartDialog.showToast(e.toString());
     } finally {
-      SmartDialog.dismiss(status: SmartStatus.loading);
-      pageLoadding.value = false;
+      if (!_closing && generation == _roomGeneration) {
+        SmartDialog.dismiss(status: SmartStatus.loading);
+        pageLoadding.value = false;
+      }
+    }
+  }
+
+  Future<void> _startDanmaku(int generation, dynamic data) async {
+    try {
+      await liveDanmaku.start(data);
+    } catch (error) {
+      if (!_closing && generation == _roomGeneration) {
+        Log.logPrint(error);
+        _reportDanmakuDiagnostic('弹幕启动失败，请刷新直播间重试：$error');
+      }
     }
   }
 
@@ -172,8 +355,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     qualites.clear();
     currentQuality = -1;
     try {
-      var playQualites =
-          await site.liveSite.getPlayQualites(detail: detail.value!);
+      var playQualites = await site.liveSite.getPlayQualites(
+        detail: detail.value!,
+      );
 
       if (playQualites.isEmpty) {
         SmartDialog.showToast("无法读取播放清晰度");
@@ -205,8 +389,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     currentQualityInfo.value = qualites[currentQuality].quality;
     currentLineInfo.value = "";
     currentLineIndex = -1;
-    var playUrl = await site.liveSite
-        .getPlayUrls(detail: detail.value!, quality: qualites[currentQuality]);
+    var playUrl = await site.liveSite.getPlayUrls(
+      detail: detail.value!,
+      quality: qualites[currentQuality],
+    );
     if (playUrl.urls.isEmpty) {
       SmartDialog.showToast("无法读取播放地址");
       return;
@@ -232,12 +418,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     errorMsg.value = "";
     // 初始化播放器并设置 ao 参数
     await initializePlayer();
-    player.open(
-      Media(
-        playUrls[currentLineIndex],
-        httpHeaders: playHeaders,
-      ),
-    );
+    player.open(Media(playUrls[currentLineIndex], httpHeaders: playHeaders));
 
     Log.d("播放链接\r\n：${playUrls[currentLineIndex]}");
   }
@@ -352,12 +533,14 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   }
 
   void resetRoom(Site site, String roomId) async {
-    if (this.site == site && this.roomId == roomId) {
+    if (_closing || (this.site == site && this.roomId == roomId)) {
       return;
     }
 
     rxSite.value = site;
     rxRoomId.value = roomId;
+    final generation = ++_roomGeneration;
+    _invalidateMessages();
 
     // 清除全部消息
     liveDanmaku.stop();
@@ -369,6 +552,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
     // 停止播放
     await player.stop();
+    if (_closing || generation != _roomGeneration) return;
 
     // 刷新信息
     loadData();
@@ -381,8 +565,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       SmartDialog.showToast("没有正在直播的频道");
       return;
     }
-    var index = liveChannels
-        .indexWhere((element) => element.id == "${site.id}_$roomId");
+    var index = liveChannels.indexWhere(
+      (element) => element.id == "${site.id}_$roomId",
+    );
     // if (index == -1) {
     //   //当前频道不在列表中
 
@@ -404,8 +589,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       SmartDialog.showToast("没有正在直播的频道");
       return;
     }
-    var index = liveChannels
-        .indexWhere((element) => element.id == "${site.id}_$roomId");
+    var index = liveChannels.indexWhere(
+      (element) => element.id == "${site.id}_$roomId",
+    );
     // if (index == -1) {
     //   //当前频道不在列表中
 
@@ -423,24 +609,48 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
+    if (_closing) return;
 
-    if (state == AppLifecycleState.paused) {
+    if (state != AppLifecycleState.resumed) {
       Log.d("进入后台");
       //进入后台，关闭弹幕
       danmakuController?.clear();
       isBackground = true;
+      danmakuForeground.value = false;
+      danmakuController?.setEnabled(false);
+      _messageFlushTimer?.cancel();
+      _messageFlushTimer = null;
+      _clearPendingMessages();
     } else
     //返回前台
     if (state == AppLifecycleState.resumed) {
       Log.d("返回前台");
       isBackground = false;
+      danmakuForeground.value = true;
+      danmakuController?.setEnabled(danmakuEnabled);
+      _scheduleMessageFlush();
     }
   }
 
   @override
   void onClose() {
+    _closing = true;
+    ++_roomGeneration;
+    danmakuForeground.value = false;
+    _invalidateMessages();
+    _clockTimer?.cancel();
+    doubleClickTimer?.cancel();
+    _danmakuVisibilityWorker?.dispose();
+    _filterRulesWorker?.dispose();
+    SmartDialog.dismiss(status: SmartStatus.loading);
+    WidgetsBinding.instance.removeObserver(this);
+    if (_watchRegistered && Get.isRegistered<FollowUserService>()) {
+      FollowUserService.instance.endWatching();
+      _watchRegistered = false;
+    }
     liveDanmaku.stop();
-
+    focusNode.dispose();
+    danmakuController?.clear();
     danmakuController = null;
     super.onClose();
   }

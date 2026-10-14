@@ -1,9 +1,9 @@
 name: simple_live_app
-version: 1.12.4+11105
+version: 1.12.5+11106
 publish_to: none
 description: "Simple Live APP"
 environment:
-  sdk: ">=3.0.5 <4.0.0"
+  sdk: ">=3.10.0 <4.0.0"
 
 dependencies:
   simple_live_core:
@@ -37,7 +37,8 @@ dependencies:
   flutter_smart_dialog: ^4.9.8+9 #各种弹窗 Toast/Dialog/Popup
   sticky_headers: ^0.3.0+2 #吸顶
   lottie: ^3.3.2 #lottie动画
-  canvas_danmaku: ^0.2.7
+  canvas_danmaku:
+    path: ../packages/canvas_danmaku
   # ns_danmaku: #弹幕
   #   git:
   #     url: https://github.com/xiaoyaocz/flutter_ns_danmaku.git
@@ -88,12 +89,18 @@ dependencies:
 
 
 dev_dependencies:
+  danmaku_native:
+    path: ../simple_live_core/packages/danmaku_native
+  dart_quickjs:
+    path: ../simple_live_core/packages/dart_quickjs
   path_provider_platform_interface: 2.1.3
   flutter_lints: ^2.0.0
   build_runner: ^2.3.3
   hive_generator: ^2.0.0
   flutter_launcher_icons: ^0.13.1
   flutter_test:
+    sdk: flutter
+  integration_test:
     sdk: flutter
 
 flutter_launcher_icons:

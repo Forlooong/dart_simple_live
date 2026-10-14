@@ -1,5 +1,5 @@
 name: app-build-action-windows
-run-name: "Release Windows · 1.12.4+11105 · #${{ github.run_number }}"
+run-name: "Release Windows · 1.12.5+11106 · #${{ github.run_number }}"
 
 on:
   workflow_dispatch:
@@ -8,6 +8,8 @@ on:
     paths:
       - 'simple_live_app/**'
       - 'simple_live_core/**'
+      - 'packages/**'
+      - '.github/actions/**'
       - 'tool/**'
       - '.github/workflows/fork_windows.yml'
 
@@ -42,10 +44,21 @@ jobs:
           flutter-version: '3.38.10'
           channel: stable
           cache: true
+      - name: Set up Rust native targets
+        uses: ./.github/actions/setup-native
+      - name: Build console with native asset bundle
+        working-directory: simple_live_console
+        run: |
+          dart pub get --enforce-lockfile
+          dart build cli --target bin/simple_live_console.dart --output build/cli
+          python ../tool/verify_native_bundle.py cli build/cli
       - name: Restore locked packages
         run: flutter pub get --enforce-lockfile
+      - uses: ./.github/actions/check-native
       - name: Build Windows release
         run: flutter build windows --release --no-pub
+      - name: Load bundled native ABI
+        run: python ../tool/verify_native_bundle.py windows build/windows/x64/runner/Release
       - name: Package portable Windows app
         shell: pwsh
         env:

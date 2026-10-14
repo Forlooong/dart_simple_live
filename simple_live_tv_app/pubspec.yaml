@@ -1,10 +1,10 @@
 name: simple_live_tv_app
 description: A new Flutter project.
 publish_to: "none"
-version: 1.7.0+10605
+version: 1.7.1+10606
 
 environment:
-  sdk: ">=3.1.2 <4.0.0"
+  sdk: ">=3.10.0 <4.0.0"
 
 dependencies:
   flutter:
@@ -35,7 +35,8 @@ dependencies:
   lottie: ^3.3.2 #Lottie动画
   qr_flutter: ^4.1.0 #二维码
   sticky_headers: ^0.3.0+2 #吸顶
-  canvas_danmaku: ^0.2.7 #弹幕
+  canvas_danmaku:
+    path: ../packages/canvas_danmaku
 
   #系统交互
   package_info_plus: ^9.0.0 #包信息

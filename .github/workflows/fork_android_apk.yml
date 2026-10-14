@@ -1,5 +1,5 @@
 name: app-build-action-android
-run-name: "Release Android · 1.12.4+11105 · #${{ github.run_number }}"
+run-name: "Release Android · 1.12.5+11106 · #${{ github.run_number }}"
 
 on:
   push:
@@ -44,8 +44,13 @@ jobs:
           flutter-version: '3.38.10'
           channel: stable
           cache: true
+      - name: Set up Rust native targets
+        uses: ./.github/actions/setup-native
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
       - name: Restore packages
         run: flutter pub get --enforce-lockfile
+      - uses: ./.github/actions/check-native
 
       - name: Check player and notification code
         run: |
@@ -57,6 +62,7 @@ jobs:
             lib/services/live_notification_service.dart \
             lib/services/live_notifications \
             lib/services/follow_import.dart \
+            lib/services/follow_service.dart \
             lib/main.dart \
             lib/models/db/follow_user.dart \
             lib/modules/follow_user \
@@ -69,6 +75,9 @@ jobs:
           test/live_room_lifecycle_test.dart
           test/live_playback_recovery_test.dart
           test/danmaku_lifecycle_test.dart
+          test/chat_message_buffer_test.dart
+          test/danmaku_rule_validation_test.dart
+          test/follow_refresh_test.dart
           test/follow_notification_preferences_test.dart
           test/live_status_validation_test.dart
           test/live_notification_runner_test.dart
@@ -131,6 +140,8 @@ jobs:
 
       - name: Build release APKs
         run: flutter build apk --release --split-per-abi --no-pub
+      - name: Verify bundled native libraries and 16 KiB alignment
+        run: python ../tool/verify_native_bundle.py android build/app/outputs/flutter-apk
 
       - name: Verify APK signatures and prepare artifacts
         env:
