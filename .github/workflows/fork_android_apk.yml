@@ -59,6 +59,7 @@ jobs:
           flutter analyze --no-pub --no-fatal-infos \
             lib/modules/live_room/live_room_controller.dart \
             lib/modules/live_room/player/player_controller.dart \
+            lib/modules/live_room/player/playback_diagnostics.dart \
             lib/modules/live_room/player/player_command_queue.dart \
             lib/routes/app_navigation.dart \
             lib/services/live_notification_service.dart \
@@ -77,6 +78,7 @@ jobs:
           test/player_command_queue_test.dart
           test/live_room_lifecycle_test.dart
           test/live_playback_recovery_test.dart
+          test/playback_diagnostics_test.dart
           test/danmaku_lifecycle_test.dart
           test/chat_message_buffer_test.dart
           test/danmaku_rule_validation_test.dart

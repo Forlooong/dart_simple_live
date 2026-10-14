@@ -763,6 +763,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       // CDN alternatives are not consecutive programmes. Keep libmpv from
       // advancing to another line independently of application recovery.
       // open() also avoids jump() -> play() -> seek(0) on an ended live FLV.
+      playbackDiagnostics.opened();
       await player.open(media);
     });
   }
@@ -856,6 +857,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         // replacing it, and avoid repeatedly rebuilding the native decoder.
         await Future<void>.delayed(const Duration(milliseconds: 300));
         if (!_isCurrentPlayback(room, playback)) return;
+        playbackDiagnostics.recoveryAttempt();
         Log.i("播放恢复：第 $attempt 次，重新获取直播地址");
         try {
           if (!await _refreshPlaybackSource(room, playback)) return;

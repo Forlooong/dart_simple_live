@@ -22,8 +22,10 @@ import 'package:simple_live_app/app/utils.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:simple_live_app/modules/live_room/player/player_command_queue.dart';
+import 'package:simple_live_app/modules/live_room/player/playback_diagnostics.dart';
 
 mixin PlayerMixin {
+  final playbackDiagnostics = PlaybackDiagnostics();
   final _playerCommands = PlayerCommandQueue(
     onError: (error, stack) => Log.e(error.toString(), stack),
   );
@@ -720,6 +722,7 @@ class PlayerController extends BaseController
   StreamSubscription? _heightSubscription;
   StreamSubscription? _logSubscription;
   StreamSubscription? _playingSubscription;
+  StreamSubscription<bool>? _bufferingSubscription;
   StreamSubscription<Duration>? _positionSubscription;
 
   void initStream() {
@@ -738,10 +741,15 @@ class PlayerController extends BaseController
 
     _playingSubscription = player.stream.playing.listen((event) {
       if (playerClosing) return;
+      playbackDiagnostics.playing(event);
       if (event) {
         WakelockPlus.enable();
         Log.d("Playing");
       }
+    });
+
+    _bufferingSubscription = player.stream.buffering.listen((event) {
+      if (!playerClosing) playbackDiagnostics.buffering(event);
     });
 
     _completedSubscription = player.stream.completed.listen((event) {
@@ -751,7 +759,9 @@ class PlayerController extends BaseController
       }
     });
     _positionSubscription = player.stream.position.listen((position) {
-      if (!playerClosing) mediaPosition(position);
+      if (playerClosing) return;
+      playbackDiagnostics.position(position);
+      mediaPosition(position);
     });
     _logSubscription = player.stream.log.listen((event) {
       if (playerClosing) return;
@@ -784,6 +794,7 @@ class PlayerController extends BaseController
       if (_logSubscription != null) _logSubscription!.cancel(),
       if (_pipSubscription != null) _pipSubscription!.cancel(),
       if (_playingSubscription != null) _playingSubscription!.cancel(),
+      if (_bufferingSubscription != null) _bufferingSubscription!.cancel(),
       if (_positionSubscription != null) _positionSubscription!.cancel(),
     ]);
   }
@@ -803,6 +814,19 @@ class PlayerController extends BaseController
       title: "播放信息",
       child: ListView(
         children: [
+          ListTile(
+            title: const Text("播放状态（诊断，点击复制）"),
+            subtitle: Text(
+              playbackDiagnostics.snapshot(),
+              maxLines: 8,
+              overflow: TextOverflow.ellipsis,
+            ),
+            onTap: () {
+              Clipboard.setData(
+                ClipboardData(text: playbackDiagnostics.snapshot()),
+              );
+            },
+          ),
           ListTile(
             title: const Text("Resolution"),
             subtitle: Text('${player.state.width}x${player.state.height}'),
@@ -891,6 +915,7 @@ class PlayerController extends BaseController
   Future<void> closePlayer() {
     if (_closeFuture != null) return _closeFuture!;
     _playerCommands.stopAcceptingCommands();
+    playbackDiagnostics.close();
     Log.w("播放器关闭");
     hidevolumeTimer?.cancel();
     hideControlsTimer?.cancel();
