@@ -1,5 +1,5 @@
 name: app-build-action-linux
-run-name: "Release Linux · 1.12.6+11107 · #${{ github.run_number }}"
+run-name: "Release Linux · 1.12.7+11108 · #${{ github.run_number }}"
 
 on:
   workflow_dispatch:
