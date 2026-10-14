@@ -338,9 +338,23 @@ def sdk_tools():
 
 
 def certificate_digest(text):
-    matches = re.findall(r"^Signer #1 certificate SHA-256 digest: ([0-9a-fA-F]{64})$", text, re.M)
-    require(len(matches) == 1 and not re.search(r"^Signer #(?:[2-9]|\d\d)", text, re.M), "Require one unambiguous APK signer")
-    return matches[0].lower()
+    # Current SDK reports in our actual CI artifacts use "V2 Signer:"; older
+    # SDKs use "Signer #1". Keep an explicit allowlist rather than accepting an
+    # arbitrary signer or silently dropping a second/unknown certificate.
+    labels = set()
+    digests = []
+    for line in text.splitlines():
+        if "Signer" in line and not line.startswith(("WARNING:", "INFO:")):
+            heading = re.match(r"^(Signer #1|V2 Signer:) (?:certificate|public key|key) ", line)
+            require(heading is not None, "Unsupported or additional APK signer")
+            labels.add(heading[1])
+        if "certificate SHA-256 digest" in line:
+            record = re.fullmatch(
+                r"(Signer #1|V2 Signer:) certificate SHA-256 digest: ([0-9a-fA-F]{64})", line)
+            require(record is not None, "Malformed or unsupported APK certificate digest")
+            digests.append(record[2].lower())
+    require(len(labels) == 1 and len(digests) == 1, "Require one unambiguous APK signer")
+    return digests[0]
 
 
 def validate_badging(text, version, abi, offset, package):

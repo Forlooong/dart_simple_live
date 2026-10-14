@@ -15,6 +15,18 @@ import zipfile
 import publish_prerelease as p
 
 
+# Verbatim public certificate report from Android workflow 38598572391,
+# artifact 11912892625, arm64-v8a-SIGNING-CERT.txt (source d7c73c6).
+# This is a certificate fingerprint, never a private signing key.
+ACTUAL_V2_SIGNER_REPORT = """V2 Signer: certificate DN: C=US, O=Android, CN=Android Debug
+V2 Signer: certificate SHA-256 digest: 0534e4a59e0aac8bbd0d9a356b57f66a1c09e755c1a7388ecec4d90efe25dd0c
+V2 Signer: certificate SHA-1 digest: 498d5069bfffc353481c13a37a9b3a088aef01b3
+V2 Signer: certificate MD5 digest: cddd0f9068e70339609f6bb2543321c8
+
+"""
+ACTUAL_V2_CERTIFICATE_SHA256 = "0534e4a59e0aac8bbd0d9a356b57f66a1c09e755c1a7388ecec4d90efe25dd0c"
+
+
 def plan():
     value = json.loads((p.ROOT / "tool/prerelease-target.json").read_text())
     value["enabled"] = True
@@ -217,6 +229,61 @@ class ArchiveTests(unittest.TestCase):
         for invalid in ("", cert + cert, cert + "Signer #2 certificate SHA-256 digest: " + "b" * 64):
             with self.assertRaises(ValueError):
                 p.certificate_digest(invalid)
+
+    def test_actual_v2_certificate_report_and_legacy_layout(self):
+        self.assertEqual(p.certificate_digest(ACTUAL_V2_SIGNER_REPORT), ACTUAL_V2_CERTIFICATE_SHA256)
+        legacy = ACTUAL_V2_SIGNER_REPORT.replace("V2 Signer:", "Signer #1")
+        self.assertEqual(p.certificate_digest(legacy), ACTUAL_V2_CERTIFICATE_SHA256)
+        self.assertEqual(p.certificate_digest(ACTUAL_V2_SIGNER_REPORT.replace("\n", "\r\n")),
+                         ACTUAL_V2_CERTIFICATE_SHA256)
+
+    def test_v2_reports_reject_extra_unknown_and_malformed_signers(self):
+        report = ACTUAL_V2_SIGNER_REPORT
+        invalid = [
+            report + report,  # Even two identical digest records are ambiguous.
+            report + report.replace("V2 Signer:", "Signer #1"),
+            report + "Signer #2 certificate DN: another signer\n",
+            report + "V3 Signer: certificate DN: another signer\n",
+            report + "Source Stamp Signer certificate DN: another signer\n",
+            report + "Signer (minSdkVersion=24, maxSdkVersion=32) certificate DN: another signer\n",
+            report + "Unknown Signer certificate SHA-256 digest: " + "b" * 64 + "\n",
+            report.replace("V2 Signer:", "V2 Signer #2:"),
+            report.replace(ACTUAL_V2_CERTIFICATE_SHA256, "not-a-sha256"),
+            report.replace("certificate SHA-256 digest:", "certificate SHA-256 digest="),
+            report.replace("certificate SHA-256 digest", "public key SHA-256 digest"),
+        ]
+        for text in invalid:
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                p.certificate_digest(text)
+
+    def test_apk_signature_success_and_matching_report_stay_required(self):
+        target = plan()
+        run, _ = run_fixture("android", target)
+        identity = p.artifact_identity("android", run, target)[0]
+        filename = next(name for name in p.expected_packages("android", identity, target) if "-arm64-" in name)
+        path = self.root / filename
+        version = target["main_version"]
+        name, build = version.split("+")
+        badging = (f"package: name='com.xycz.simple_live' versionCode='{int(build) + 2000}' versionName='{name}'\n"
+                   "native-code: 'arm64-v8a'\n")
+        info = (f"Commit: {target['source_sha']}\nSource version: {version}\nArtifact version: {identity}\n"
+                "Signing: debug-signed-test-only\nPackage: com.xycz.simple_live\n")
+        files = {"arm64-v8a-SIGNING-CERT.txt": ACTUAL_V2_SIGNER_REPORT.encode(), "BUILD-INFO.txt": info.encode()}
+        tools = {name: name for name in ("apksigner", "aapt2", "zipalign")}
+        with patch.object(p, "command", side_effect=[ACTUAL_V2_SIGNER_REPORT, badging, ""]) as command, \
+                patch("verify_native_bundle.verify_apk") as native:
+            record = p.verify_apk_bytes(path, "android", identity, target, files, tools)
+            self.assertTrue(record["signature_verified"])
+            self.assertEqual(record["certificate_sha256"], ACTUAL_V2_CERTIFICATE_SHA256)
+            self.assertEqual(command.call_args_list[0].args, ("apksigner", "verify", "--print-certs", str(path)))
+            native.assert_called_once_with(path, "arm64-v8a")
+        different_report = ACTUAL_V2_SIGNER_REPORT.replace(ACTUAL_V2_CERTIFICATE_SHA256, "b" * 64)
+        with patch.object(p, "command", return_value=different_report), self.assertRaisesRegex(ValueError, "differs from CI"):
+            p.verify_apk_bytes(path, "android", identity, target, files, tools)
+        with patch.object(p.subprocess, "run") as process, self.assertRaisesRegex(ValueError, "apksigner failed"):
+            process.return_value.returncode = 1
+            process.return_value.stderr = "DOES NOT VERIFY"
+            p.verify_apk_bytes(path, "android", identity, target, files, tools)
 
     def test_packages_and_metadata_exact_set_and_hash(self):
         target = plan()

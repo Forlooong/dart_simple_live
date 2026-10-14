@@ -30,7 +30,8 @@ repository permission changes, or signing keys. The dedicated job requests only
    - `tool/test_publish_prerelease.py`
    - `docs/verified-prerelease.md`
 
-The push trigger watches only the publisher workflow and target JSON on
+The push trigger watches only the publisher workflow, target JSON, publisher script
+and publisher regression tests on
 `fix/known-issues-release`. Other commits do not activate it. There is no PR,
 `workflow_run`, tag, external input or dispatch trigger. A trusted branch push
 associated with a PR is allowed; a `pull_request`/`pull_request_target` run is not.
