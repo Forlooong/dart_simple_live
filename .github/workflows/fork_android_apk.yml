@@ -139,7 +139,9 @@ jobs:
           PY
 
       - name: Build release APKs
-        run: flutter build apk --release --split-per-abi --no-pub
+        # Flutter 3.38 needs its pub phase to regenerate release-only plugin
+        # registration after tests; --no-pub retains integration_test references.
+        run: flutter build apk --release --split-per-abi
       - name: Verify bundled native libraries and 16 KiB alignment
         run: python ../tool/verify_native_bundle.py android build/app/outputs/flutter-apk
 
