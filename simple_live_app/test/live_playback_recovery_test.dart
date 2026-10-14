@@ -223,13 +223,43 @@ void main() {
   });
   tearDown(() => Get.reset());
 
+  const loadingKey = ValueKey('playback-refresh-loading');
+
   Future<void> prepareDialogs(WidgetTester tester) async {
+    // These tests exercise playback refresh, not dialog animation. The real
+    // controller shows/dismisses loading inside runAsync; an indeterminate
+    // spinner can otherwise keep pumpAndSettle alive across that zone boundary.
+    final previousLoading = SmartDialog.config.loading;
+    SmartDialog.config.loading = SmartConfigLoading(
+      useAnimation: false,
+      leastLoadingTime: Duration.zero,
+    );
+    addTearDown(() => SmartDialog.config.loading = previousLoading);
     await tester.pumpWidget(
       MaterialApp(
-        builder: FlutterSmartDialog.init(),
+        builder: FlutterSmartDialog.init(
+          loadingBuilder: (_) => const SizedBox(key: loadingKey),
+        ),
         home: const Scaffold(body: SizedBox()),
       ),
     );
+  }
+
+  Future<void> finishDialogs(WidgetTester tester) async {
+    // Let the controller's unawaited dismiss finish in the same real async
+    // environment as showLoading, while explicitly checking the visible UI.
+    // Do not merely unmount a still-visible loading dialog to make tests pass.
+    final deadline = DateTime.now().add(const Duration(seconds: 5));
+    await tester.pump();
+    while (find.byKey(loadingKey).evaluate().isNotEmpty &&
+        DateTime.now().isBefore(deadline)) {
+      await tester.runAsync(() =>
+          Future<void>.delayed(const Duration(milliseconds: 10)));
+      await tester.pump();
+    }
+    expect(find.byKey(loadingKey), findsNothing,
+        reason: 'room refresh must dismiss its loading dialog');
+    await tester.pumpWidget(const SizedBox.shrink());
   }
 
   testWidgets('manual refresh stops a confirmed offline stream', (
@@ -249,7 +279,7 @@ void main() {
       expect(native.stops, 1);
       expect(native.opens, hasLength(1));
     });
-    await tester.pumpAndSettle();
+    await finishDialogs(tester);
   });
 
   testWidgets('offline recordings remain playable on manual refresh', (
@@ -270,7 +300,7 @@ void main() {
       expect(room.liveStatus.value, isTrue);
       expect(native.stops, 0);
     });
-    await tester.pumpAndSettle();
+    await finishDialogs(tester);
   });
 
   testWidgets('failed refresh does not stop an existing stream', (
@@ -289,7 +319,7 @@ void main() {
       expect(native.stops, 0);
       expect(native.opens, hasLength(1));
     });
-    await tester.pumpAndSettle();
+    await finishDialogs(tester);
   });
 
   testWidgets('stale queued offline stop cannot stop a newer refresh', (
@@ -324,7 +354,7 @@ void main() {
       expect(room.liveStatus.value, isTrue);
       expect(native.stops, 0);
     });
-    await tester.pumpAndSettle();
+    await finishDialogs(tester);
   });
 
   test('alternate CDN lines are not an auto-advancing native playlist',
