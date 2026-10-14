@@ -163,8 +163,9 @@ class FollowUserController extends BasePageController<FollowUser> {
   // 修改item的标签
   Future<void> setItemTag(FollowUser item, FollowUserTag targetTag) async {
     FollowUserTag tarTag = targetTag;
-    if (tarTag.tag != '全部' && !DBService.instance.getFollowTagExist(tarTag.id))
+    if (tarTag.tag != '全部' && !DBService.instance.getFollowTagExist(tarTag.id)) {
       return;
+    }
     FollowUserTag curTag = tagList.firstWhere((tag) => tag.tag == item.tag);
     // 从当前标签（非全部）删除item 向目标标签(全部包含所有item == 非全部)添加item
     curTag.userId.remove(item.id);

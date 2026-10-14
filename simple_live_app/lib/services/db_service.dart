@@ -6,7 +6,6 @@ import 'package:simple_live_app/models/db/follow_user.dart';
 import 'package:simple_live_app/models/db/follow_user_tag.dart';
 import 'package:simple_live_app/models/db/history.dart';
 import 'package:uuid/uuid.dart';
-import 'package:collection/collection.dart';
 
 class DBService extends GetxService {
   DBService({

@@ -7,6 +7,8 @@ on:
       - master
       - fix/known-issues-release
     paths:
+      # Main-app corrections participate in the same exact-head release cohort.
+      - 'simple_live_app/**'
       - 'simple_live_tv_app/**'
       - 'simple_live_core/**'
       - 'packages/**'
