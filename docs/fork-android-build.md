@@ -33,8 +33,13 @@ precedence and must be complete.
 
 A debug-signed build cannot update an installed app signed with a different key.
 The CI debug key may change on each fresh runner, so it is not suitable for a
-stable update channel. Before choosing to uninstall another build, export any
-settings/data you need: uninstalling removes its local data. A matching, persistent
+stable update channel. In particular, a certificate different from the old 1.12.5
+APK cannot update that installation. Keep the existing app until you explicitly
+choose a migration. Export follows from the follow page and settings from
+Settings → Other → Export configuration separately: settings export does not
+include the follows database. Verify both files outside the app before any
+user-chosen uninstall, which removes local data. These exports are not a promise
+to preserve all account/session/history data. A matching, persistent
 release keystore is required for normal in-place updates. The workflow does not
 change the package ID or uninstall anything on your device.
 
@@ -90,3 +95,9 @@ The mobile app commits `simple_live_app/pubspec.lock` from the reviewed CI
 dependency snapshot. The fork workflow uses `flutter pub get --enforce-lockfile`
 so it fails instead of silently resolving newer packages or changed checksums.
 The lockfile, Flutter version and exact commit also travel with the APK artifact.
+
+## Final release verification
+
+See [release gates](release-gates.md) for exact-commit platform builds, whole-APK
+ELF/ABI/ZIP validation, signing compatibility and real 16 KiB device testing.
+Successful static checks alone do not establish runtime compatibility.

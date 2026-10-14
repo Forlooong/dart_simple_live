@@ -38,10 +38,27 @@ class _DeferredFollowStatusSite extends _FollowStatusSite {
   }
 }
 
+class _DelayedOrderDB extends DBService {
+  Completer<void>? orderGate;
+  Completer<void>? updateGate;
+
+  @override
+  Future<void> updateFollowTag(FollowUserTag tag) async {
+    await updateGate?.future;
+    await super.updateFollowTag(tag);
+  }
+
+  @override
+  Future<void> updateFollowTagOrder(List<FollowUserTag> tags) async {
+    await orderGate?.future;
+    await super.updateFollowTagOrder(tags);
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late Directory directory;
-  late DBService database;
+  late _DelayedOrderDB database;
   late FollowService service;
   late FollowUserController controller;
   var controllerClosed = false;
@@ -79,13 +96,13 @@ void main() {
     if (!Hive.isAdapterRegistered(3)) {
       Hive.registerAdapter(FollowUserTagAdapter());
     }
-    database = DBService()
+    database = _DelayedOrderDB()
       ..followBox = await Hive.openBox<FollowUser>('follows')
       ..tagBox = await Hive.openBox<FollowUserTag>('tags');
     final storage = LocalStorageService()
       ..settingsBox = await Hive.openBox<dynamic>('settings')
       ..shieldBox = await Hive.openBox<String>('shield');
-    Get.put(database);
+    Get.put<DBService>(database);
     Get.put(storage);
     final settings = Get.put(AppSettingsController());
     settings.autoUpdateFollowEnable.value = false;
@@ -311,6 +328,88 @@ void main() {
 
       expect(service.liveList.map((item) => item.id), [item.id]);
       expectVisibleIds([]);
+    },
+  );
+
+  test(
+    'status completion preserves reordered tags in service and controller',
+    () async {
+      final deferredSite = _DeferredFollowStatusSite();
+      Sites.allSites['follow_test'] = Site(
+        id: 'follow_test',
+        name: 'test',
+        logo: '',
+        liveSite: deferredSite,
+      );
+      await database.addFollow(room());
+      await database.addFollowTag('A');
+      await database.addFollowTag('B');
+      await service.loadData(updateStatus: false);
+      controller.updateTagList();
+      final refresh = service.loadData(automatic: true);
+      await deferredSite.started.future;
+      database.orderGate = Completer<void>();
+      final reorder = controller.updateTagOrder(0, 2);
+      await service.loadData(updateStatus: false);
+      await drainEvents();
+      expect(service.followTagList.map((tag) => tag.tag), ['B', 'A']);
+      deferredSite.result.complete(const LiveRoomStatus(live: true));
+      await refresh;
+      await drainEvents();
+      expect(controller.userTagList.map((tag) => tag.tag), ['B', 'A']);
+      database.orderGate!.complete();
+      await reorder;
+      expect(database.getFollowTagList().map((tag) => tag.tag), ['B', 'A']);
+    },
+  );
+
+  test('delayed tag rename reconciles an intervening storage reload', () async {
+    final tag = await database.addFollowTag('Before');
+    await service.loadData(updateStatus: false);
+    database.updateGate = Completer<void>();
+    final rename = service.updateFollowUserTag(tag.copyWith(tag: 'After'));
+    await service.loadData(updateStatus: false);
+    expect(service.followTagList.single.tag, 'Before');
+    database.updateGate!.complete();
+    await rename;
+    await drainEvents();
+    expect(service.followTagList.single.tag, 'After');
+    expect(controller.userTagList.single.tag, 'After');
+  });
+
+  test(
+    'delayed rename never recreates a tag deleted before its write',
+    () async {
+      final tag = await database.addFollowTag('Before');
+      await service.loadData(updateStatus: false);
+      database.updateGate = Completer<void>();
+      final rename = service.updateFollowUserTag(tag.copyWith(tag: 'After'));
+      await database.deleteFollowTag(tag.id);
+      database.updateGate!.complete();
+      await rename;
+      await drainEvents();
+      expect(service.followTagList, isEmpty);
+      expect(controller.userTagList, isEmpty);
+    },
+  );
+
+  test(
+    'controller rename stops if tag is deleted while its write waits',
+    () async {
+      final item = room();
+      await database.addFollow(item);
+      final tag = await database.addFollowTag('Before');
+      tag.userId.add(item.id);
+      await database.updateFollowTag(tag);
+      await service.loadData(updateStatus: false);
+      controller.updateTagList();
+      database.updateGate = Completer<void>();
+      final rename = controller.updateTagName(tag, 'After');
+      await database.deleteFollowTag(tag.id);
+      database.updateGate!.complete();
+      await rename;
+      expect(database.followBox.get(item.id)!.tag, '全部');
+      expect(database.getFollowTagList(), isEmpty);
     },
   );
 

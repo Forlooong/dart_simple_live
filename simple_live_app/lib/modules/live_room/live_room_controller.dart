@@ -599,6 +599,13 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       liveStatus.value = detail.value!.status || detail.value!.isRecord;
       if (liveStatus.value) {
         getPlayQualites(generation);
+      } else {
+        // A manual refresh can confirm that the current stream is offline.
+        // Invalidating its URL state alone does not unload native playback.
+        await runPlayerCommand(() async {
+          if (_isCurrentRoom(generation)) await player.stop();
+        });
+        if (!_isCurrentRoom(generation)) return;
       }
       if (detail.value!.isRecord) {
         addSysMsg("当前主播未开播，正在轮播录像");

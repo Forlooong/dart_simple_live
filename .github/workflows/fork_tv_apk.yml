@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - master
+      - fix/known-issues-release
     paths:
       - 'simple_live_tv_app/**'
       - 'simple_live_core/**'
@@ -116,8 +117,16 @@ jobs:
 
       - name: Build release APKs
         run: flutter build apk --release --split-per-abi --no-pub
-      - name: Verify bundled native libraries and 16 KiB alignment
-        run: python ../tool/verify_native_bundle.py android build/app/outputs/flutter-apk
+      - name: Verify every native library, ABI and APK ZIP alignment
+        run: |
+          set -euo pipefail
+          python ../tool/verify_native_bundle.py android build/app/outputs/flutter-apk
+          sdk_root="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          zipalign="$(find "$sdk_root/build-tools" -name zipalign -type f | sort -V | tail -n 1)"
+          test -x "$zipalign"
+          for apk in build/app/outputs/flutter-apk/app-*-release.apk; do
+            "$zipalign" -c -P 16 4 "$apk"
+          done
 
       - name: Verify APK signatures and prepare artifacts
         env:
@@ -168,7 +177,9 @@ jobs:
             'Package: com.xycz.simple_live_tv' \
             'Android TV: choose arm64, arm32 or x64 to match the device CPU and OS.' \
             'A debug-signed APK cannot update an app signed with another key.' \
-            'Export settings before uninstalling any existing app; uninstalling deletes its local data.' \
+            'Keep the existing app and data until you explicitly choose a migration; no uninstall is automatic.' \
+            'TV: verify an available backup or migration route before replacing the installed app.' \
+            'Do not assume the main-app export UI exists on TV; uninstall deletes local data.' \
             'Debug signing keys on fresh CI runners can change between runs.' \
             > BUILD-INFO.txt
           cat FLUTTER-VERSION.txt >> BUILD-INFO.txt

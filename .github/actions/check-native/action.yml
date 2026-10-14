@@ -6,7 +6,7 @@ runs:
     - name: Test native packaging checks
       shell: bash
       working-directory: ${{ github.workspace }}
-      run: python -B -m unittest discover -s tool -p test_native_bundle.py
+      run: python -B -m unittest discover -s tool -p 'test_*.py'
     - name: Test Rust protocol and filtering limits
       shell: bash
       working-directory: simple_live_core/packages/danmaku_native/rust

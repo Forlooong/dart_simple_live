@@ -1,12 +1,15 @@
 import 'dart:async';
 
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
+import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
 class _Settings extends AppSettingsController {
@@ -21,6 +24,7 @@ class _Site extends LiveSite {
   int qualityRequests = 0;
   Completer<LivePlayUrl>? nextResponse;
   bool offline = false;
+  bool record = false;
   bool failRefresh = false;
   final requestedDetails = <LiveRoomDetail>[];
   final requestedQualities = <LivePlayQuality>[];
@@ -29,7 +33,11 @@ class _Site extends LiveSite {
   Future<LiveRoomDetail> getRoomDetail({required String roomId}) async {
     detailRequests++;
     if (failRefresh) throw StateError('provider unavailable');
-    return _detail(data: 'fresh-signature-$detailRequests', status: !offline);
+    return _detail(
+      data: 'fresh-signature-$detailRequests',
+      status: !offline,
+      isRecord: record,
+    );
   }
 
   @override
@@ -49,12 +57,13 @@ class _Site extends LiveSite {
     requestedDetails.add(detail);
     requestedQualities.add(quality);
     return nextResponse == null
-        ? LivePlayUrl(urls: [
-            'https://first.example/live?generation=$requests',
-            'https://second.example/live?generation=$requests',
-          ], headers: {
-            'Referer': 'https://room.example/'
-          })
+        ? LivePlayUrl(
+            urls: [
+              'https://first.example/live?generation=$requests',
+              'https://second.example/live?generation=$requests',
+            ],
+            headers: {'Referer': 'https://room.example/'},
+          )
         : await nextResponse!.future;
   }
 }
@@ -103,10 +112,10 @@ class _NativePlayer extends PlatformPlayer {
 
 class _Room extends LiveRoomController {
   _Room(_Site provider, this.native)
-      : super(
-          pSite: Site(id: 'douyu', liveSite: provider, logo: '', name: 'test'),
-          pRoomId: '71415',
-        );
+    : super(
+        pSite: Site(id: 'douyu', liveSite: provider, logo: '', name: 'test'),
+        pRoomId: '71415',
+      );
 
   final _NativePlayer native;
   int failureNotifications = 0;
@@ -123,6 +132,33 @@ class _Room extends LiveRoomController {
 
   @override
   Future<void> loadData() async {}
+
+  // Exercise the real room refresh while keeping unrelated chat/history
+  // services out of the native-playback fixture.
+  Future<void> refreshFromProvider() => super.loadData();
+
+  @override
+  void addHistory() {}
+
+  @override
+  void getSuperChatMessage() {}
+
+  @override
+  void initDanmau() {}
+
+  @override
+  void startLiveDurationTimer() {}
+
+  @override
+  void addSysMsg(String message) {}
+
+  @override
+  Future<int> getQualityLevel() async => 2;
+}
+
+class _Database extends DBService {
+  @override
+  bool getFollowExist(String id) => false;
 }
 
 Future<void> _settle() async {
@@ -134,21 +170,29 @@ Future<void> _until(bool Function() predicate) async {
   while (!predicate() && DateTime.now().isBefore(deadline)) {
     await Future<void>.delayed(const Duration(milliseconds: 10));
   }
-  expect(predicate(), isTrue,
-      reason: 'recovery did not reach its expected state');
+  expect(
+    predicate(),
+    isTrue,
+    reason: 'recovery did not reach its expected state',
+  );
 }
 
-LiveRoomDetail _detail({dynamic data, bool status = true}) => LiveRoomDetail(
-      roomId: '71415',
-      title: 'test',
-      cover: '',
-      userName: '',
-      userAvatar: '',
-      online: 1,
-      status: status,
-      url: '',
-      data: data,
-    );
+LiveRoomDetail _detail({
+  dynamic data,
+  bool status = true,
+  bool isRecord = false,
+}) => LiveRoomDetail(
+  roomId: '71415',
+  title: 'test',
+  cover: '',
+  userName: '',
+  userAvatar: '',
+  online: 1,
+  status: status,
+  isRecord: isRecord,
+  url: '',
+  data: data,
+);
 
 Future<_Room> _start(_Site provider, _NativePlayer native) async {
   final room = _Room(provider, native);
@@ -170,13 +214,118 @@ void main() {
 
   setUp(() {
     Get.put<AppSettingsController>(_Settings());
+    Get.put<DBService>(_Database());
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMessageHandler(
-      'dev.flutter.pigeon.wakelock_plus_platform_interface.WakelockPlusApi.toggle',
-      (_) async => const StandardMessageCodec().encodeMessage([null]),
-    );
+          'dev.flutter.pigeon.wakelock_plus_platform_interface.WakelockPlusApi.toggle',
+          (_) async => const StandardMessageCodec().encodeMessage([null]),
+        );
   });
   tearDown(() => Get.reset());
+
+  Future<void> prepareDialogs(WidgetTester tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: FlutterSmartDialog.init(),
+        home: const Scaffold(body: SizedBox()),
+      ),
+    );
+  }
+
+  testWidgets('manual refresh stops a confirmed offline stream', (
+    tester,
+  ) async {
+    await prepareDialogs(tester);
+    await tester.runAsync(() async {
+      final provider = _Site();
+      final native = _NativePlayer();
+      final room = await _start(provider, native);
+      provider.offline = true;
+
+      await room.refreshFromProvider();
+
+      expect(room.loadError.value, isFalse);
+      expect(room.liveStatus.value, isFalse);
+      expect(native.stops, 1);
+      expect(native.opens, hasLength(1));
+    });
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('offline recordings remain playable on manual refresh', (
+    tester,
+  ) async {
+    await prepareDialogs(tester);
+    await tester.runAsync(() async {
+      final provider = _Site();
+      final native = _NativePlayer();
+      final room = await _start(provider, native);
+      provider.offline = true;
+      provider.record = true;
+
+      await room.refreshFromProvider();
+      await _until(() => native.opens.length == 2);
+
+      expect(room.loadError.value, isFalse);
+      expect(room.liveStatus.value, isTrue);
+      expect(native.stops, 0);
+    });
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('failed refresh does not stop an existing stream', (
+    tester,
+  ) async {
+    await prepareDialogs(tester);
+    await tester.runAsync(() async {
+      final provider = _Site();
+      final native = _NativePlayer();
+      final room = await _start(provider, native);
+      provider.failRefresh = true;
+
+      await room.refreshFromProvider();
+
+      expect(room.loadError.value, isTrue);
+      expect(native.stops, 0);
+      expect(native.opens, hasLength(1));
+    });
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('stale queued offline stop cannot stop a newer refresh', (
+    tester,
+  ) async {
+    await prepareDialogs(tester);
+    await tester.runAsync(() async {
+      final provider = _Site();
+      final native = _NativePlayer();
+      final room = await _start(provider, native);
+      final release = Completer<void>();
+      addTearDown(() {
+        if (!release.isCompleted) release.complete();
+      });
+      final started = Completer<void>();
+      final held = room.runPlayerCommand(() async {
+        started.complete();
+        await release.future;
+      });
+      await started.future;
+      provider.offline = true;
+      final oldRefresh = room.refreshFromProvider();
+      await _until(() => !room.liveStatus.value);
+      provider.offline = false;
+      await room.refreshFromProvider();
+      release.complete();
+      await held;
+      await oldRefresh;
+      await _until(() => native.opens.length == 2);
+
+      expect(room.loadError.value, isFalse);
+      expect(room.liveStatus.value, isTrue);
+      expect(native.stops, 0);
+    });
+    await tester.pumpAndSettle();
+  });
 
   test('alternate CDN lines are not an auto-advancing native playlist',
       () async {

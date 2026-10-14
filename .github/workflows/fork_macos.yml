@@ -1,10 +1,10 @@
 name: app-build-action-macos
-run-name: "Release macOS · 1.12.7+11108 · #${{ github.run_number }}"
+run-name: "Release macOS · 1.12.8+11109 · #${{ github.run_number }}"
 
 on:
   workflow_dispatch:
   push:
-    branches: [master]
+    branches: [master, fix/known-issues-release]
     paths:
       - 'simple_live_app/**'
       - 'simple_live_core/**'

@@ -12,6 +12,12 @@ jobs:
     steps:
       #签出代码
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Validate TV release identity before signing/building
+        id: version
+        run: python tool/release_metadata.py
 
       #APK签名设置
       - name: Download Android keystore
@@ -49,15 +55,23 @@ jobs:
       - name: Restore packages
         run: |
           cd simple_live_tv_app
-          flutter pub get
+          flutter pub get --enforce-lockfile
       - uses: ./.github/actions/check-native
 
       #打包APK
       - name: Build APK
+        shell: bash
         run: |
+          set -euo pipefail
           cd simple_live_tv_app
           flutter build apk --release --split-per-abi
           python ../tool/verify_native_bundle.py android build/app/outputs/flutter-apk
+          sdk_root="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          zipalign="$(python -c 'from pathlib import Path; import sys; print(max(Path(sys.argv[1]).glob("*/zipalign"), key=lambda p: tuple(int(x) for x in p.parent.name.split(".") if x.isdigit())))' "$sdk_root/build-tools")"
+          test -x "$zipalign"
+          for apk in build/app/outputs/flutter-apk/app-*-release.apk; do
+            "$zipalign" -c -P 16 4 "$apk"
+          done
 
       #上传APK至Artifacts
       - name: Upload APK to Artifacts
@@ -69,24 +83,18 @@ jobs:
             simple_live_tv_app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
             simple_live_tv_app/build/app/outputs/flutter-apk/app-x86_64-release.apk
 
-      #读取版本信息
-      - name: Read version
-        id: version
-        uses: juliangruber/read-file-action@v1
-        with:
-          path: assets/tv_app_version.json
-      - name: Echo version
-        run: echo "${{ fromJson(steps.version.outputs.content).version }}"
-      - name: Echo version content
-        run: echo "${{ fromJson(steps.version.outputs.content).version_desc }}"
-
       #上传至Release
       - name: Upload Release
         uses: softprops/action-gh-release@v1
         with:
-          name: "${{ fromJson(steps.version.outputs.content).version }}"
-          body: "# Android TV \n${{ fromJson(steps.version.outputs.content).version_desc }}"
-          prerelease: ${{ fromJson(steps.version.outputs.content).prerelease }}
+          name: "${{ steps.version.outputs.release_name }}"
+          body: |
+            Android TV ${{ steps.version.outputs.package_version }}
+            Source: ${{ github.sha }}
+            Draft prerelease. Review docs/release-gates.md before publication.
+            Signing compatibility and on-device smoke tests must be established separately.
+          draft: true
+          prerelease: true
           token: ${{ secrets.TOKEN }}
           files: |
             simple_live_tv_app/build/app/outputs/flutter-apk/app-x86_64-release.apk

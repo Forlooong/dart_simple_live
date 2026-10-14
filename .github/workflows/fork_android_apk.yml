@@ -1,10 +1,11 @@
 name: app-build-action-android
-run-name: "Release Android · 1.12.7+11108 · #${{ github.run_number }}"
+run-name: "Release Android · 1.12.8+11109 · #${{ github.run_number }}"
 
 on:
   push:
     branches:
       - master
+      - fix/known-issues-release
       - fix/follow-list-refresh
   workflow_dispatch:
 
@@ -64,6 +65,7 @@ jobs:
             lib/services/live_notifications \
             lib/services/follow_import.dart \
             lib/services/follow_service.dart \
+            lib/services/db_service.dart \
             lib/main.dart \
             lib/models/db/follow_user.dart \
             lib/modules/follow_user \
@@ -79,6 +81,7 @@ jobs:
           test/chat_message_buffer_test.dart
           test/danmaku_rule_validation_test.dart
           test/follow_refresh_test.dart
+          test/db_follow_tag_test.dart
           test/follow_user_controller_test.dart
           test/follow_notification_preferences_test.dart
           test/live_status_validation_test.dart
@@ -144,8 +147,16 @@ jobs:
         # Flutter 3.38 needs its pub phase to regenerate release-only plugin
         # registration after tests; --no-pub retains integration_test references.
         run: flutter build apk --release --split-per-abi
-      - name: Verify bundled native libraries and 16 KiB alignment
-        run: python ../tool/verify_native_bundle.py android build/app/outputs/flutter-apk
+      - name: Verify every native library, ABI and APK ZIP alignment
+        run: |
+          set -euo pipefail
+          python ../tool/verify_native_bundle.py android build/app/outputs/flutter-apk
+          sdk_root="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          zipalign="$(find "$sdk_root/build-tools" -name zipalign -type f | sort -V | tail -n 1)"
+          test -x "$zipalign"
+          for apk in build/app/outputs/flutter-apk/app-*-release.apk; do
+            "$zipalign" -c -P 16 4 "$apk"
+          done
 
       - name: Verify APK signatures and prepare artifacts
         env:
@@ -196,7 +207,9 @@ jobs:
             'Build mode: release' \
             'Package: com.xycz.simple_live' \
             'A debug-signed APK cannot update an app signed with another key.' \
-            'Export settings before uninstalling any existing app; uninstalling deletes its local data.' \
+            'Keep the existing app and data until you explicitly choose a migration; no uninstall is automatic.' \
+            'Main app: export follows separately from settings; settings export does not include follows.' \
+            'Verify both backups outside the app before any user-chosen uninstall; uninstall deletes local data.' \
             'Debug signing keys on fresh CI runners can change between runs.' \
             > BUILD-INFO.txt
           cat FLUTTER-VERSION.txt >> BUILD-INFO.txt
@@ -240,7 +253,7 @@ jobs:
               '- arm32: 32-bit ARM devices (armeabi-v7a).' \
               '- x64: 64-bit Intel/AMD devices or emulators (x86_64).' \
               '' \
-              'TestSigned builds use a test key that may change between runs. Updating an installed app requires the same signing key; back up or export settings before uninstalling, because uninstalling removes local data.'
+              'TestSigned builds use an ephemeral key and cannot update any installation with a different certificate, including the known 1.12.5 build. Keep the old app. Main-app follows and settings require separate exports; verify both outside the app before choosing migration. Nothing uninstalls automatically.'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Remove temporary release signing files

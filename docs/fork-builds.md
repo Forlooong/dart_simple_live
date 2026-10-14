@@ -28,10 +28,12 @@ The command updates files locally; it does not commit or push. CI validates vers
 
 - Android: one artifact containing arm32, arm64 and x64 release APKs, plus a smaller arm64-only artifact linked in the build summary.
 - Android TV: one artifact containing all three APK architectures.
-- Android/TV missing signing secrets opt into test signing explicitly; incomplete secrets fail. In-place updates require the same signing key. Test keys may change between runs; back up settings before uninstalling an app signed with a different key.
+- Android/TV missing signing secrets opt into test signing explicitly; incomplete secrets fail. In-place updates require the same signing key. Test keys may change between runs. Keep the old app until a migration is explicitly chosen; main-app follows and settings require separate exports, verified outside the app before any uninstall. Do not assume TV offers the same export UI. Nothing uninstalls automatically.
 - iOS: unsigned arm64 IPA, minimum iOS 14 (required by workmanager_apple). Requires appropriate Apple signing before installation.
 - macOS: unsigned, unnotarized universal (Apple Silicon + Intel) application ZIP. macOS may block it.
 - Windows: unsigned x64 portable ZIP. Extract all files together; requires the Microsoft Visual C++ 2015–2022 x64 runtime.
 - Linux: x64 tar.gz bundle, built on Ubuntu 22.04. Extract all files together; requires GTK 3 and libmpv runtime libraries on a compatible distribution.
 
 Artifacts include SHA-256 checksums and are retained for 14 days. Download from the workflow summary or Artifacts section. These workflows do not create tags or GitHub Releases. The original tag-triggered release/development workflows remain separate.
+
+See [release gates](release-gates.md) before publishing or claiming stable/upgrade compatibility. The TV tag workflow now validates its tag against pubspec and prepares a draft prerelease; it does not trust stale update-channel JSON as the release version.
