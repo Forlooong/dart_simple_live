@@ -1,0 +1,38 @@
+name: Publish verified repair prerelease
+run-name: "Publish reviewed repair artifacts · #${{ github.run_number }}"
+
+on:
+  push:
+    branches: [fix/known-issues-release]
+    paths:
+      - '.github/workflows/publish_verified_prerelease.yml'
+      - 'tool/prerelease-target.json'
+
+permissions: {}
+
+concurrency:
+  group: publish-reviewed-repair-prerelease
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.repository == 'Forlooong/dart_simple_live' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/fix/known-issues-release'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Test fail-closed publisher
+        run: python3 -B -m unittest discover -s tool -p test_publish_prerelease.py
+      - name: Verify pinned artifacts and publish qualified prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B tool/publish_prerelease.py
