@@ -4,7 +4,7 @@ run-name: "Release Linux · 1.12.10+11111 · #${{ github.run_number }}"
 on:
   workflow_dispatch:
   push:
-    branches: [master, fix/known-issues-release]
+    branches: [master]
     paths:
       - 'simple_live_app/**'
       - 'simple_live_core/**'
