@@ -5,8 +5,6 @@ on:
   push:
     branches:
       - master
-      - fix/known-issues-release
-      - fix/follow-list-refresh
   workflow_dispatch:
 
 permissions:
