@@ -1,5 +1,5 @@
 name: app build action
-run-name: "Build all platforms · Main 1.12.14+11115 · TV 1.7.5+10610 · #${{ github.run_number }}"
+run-name: "Build all platforms · Main 1.12.15+11116 · TV 1.7.6+10611 · #${{ github.run_number }}"
 
 on:
   push:

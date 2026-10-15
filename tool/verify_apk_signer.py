@@ -31,9 +31,30 @@ def expected_signer(app, path=BASELINE):
 
 def verify_report(app, report, path=BASELINE):
     expected = expected_signer(app, path)
-    digests = re.findall(r"^Signer #[0-9]+ certificate SHA-256 digest: (\S+)\s*$", report, re.M)
-    if len(digests) != 1 or normalize(digests[0]) != expected:
-        raise ValueError(f"{app}: APK signer does not match the pinned update baseline; refusing upload")
+    # Parse only certificate digests, never public-key digests or source stamps.
+    # splitlines handles both LF and CRLF without allowing a value on another line.
+    rows = [line for line in report.splitlines()
+            if re.match(r"^Signer.* certificate SHA-?256 digest:", line)]
+    digests = []
+    for line in rows:
+        match = re.fullmatch(
+            r"Signer #[0-9]+ certificate SHA-?256 digest:[ \t]*([0-9a-fA-F:]+)[ \t]*", line)
+        if not match:
+            raise ValueError(f"{app}: unrecognized APK certificate report format; refusing upload")
+        try:
+            digests.append(normalize(match[1]))
+        except ValueError:
+            raise ValueError(f"{app}: malformed APK certificate SHA-256; refusing upload") from None
+    if len(digests) != 1:
+        raise ValueError(
+            f"{app}: expected exactly one APK certificate SHA-256, found {len(digests)}; "
+            "refusing upload")
+    if digests[0] != expected:
+        # These are validated public certificate fingerprints only. Never echo
+        # raw report text, certificate subjects, keys, passwords or environment.
+        raise ValueError(
+            f"{app}: APK signer does not match the pinned update baseline; "
+            f"expected SHA-256={expected}; actual SHA-256={digests[0]}; refusing upload")
     return expected
 
 

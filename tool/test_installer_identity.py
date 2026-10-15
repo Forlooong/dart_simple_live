@@ -40,8 +40,10 @@ class InstallerIdentityTest(unittest.TestCase):
             path.write_text(json.dumps(baseline), encoding="utf-8")
             report = f"Signer #1 certificate SHA-256 digest: {digest}\n"
             self.assertEqual(verify_report("main", report, path), digest)
-            for bad in (report.replace(digest, "cd" * 32), "", report + report.replace("#1", "#2")):
-                with self.assertRaisesRegex(ValueError, "does not match"):
+            for bad, error in ((report.replace(digest, "cd" * 32), "does not match"),
+                               ("", "found 0"),
+                               (report + report.replace("#1", "#2"), "found 2")):
+                with self.assertRaisesRegex(ValueError, error):
                     verify_report("main", bad, path)
             baseline["main"]["certificate_sha256"] = ""
             path.write_text(json.dumps(baseline), encoding="utf-8")
@@ -52,6 +54,36 @@ class InstallerIdentityTest(unittest.TestCase):
             path.write_text(json.dumps(baseline), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "package ID"):
                 expected_signer("main", path)
+
+    def test_certificate_report_variants_and_safe_diagnostics(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "baseline.json"
+            expected, actual = "ab" * 32, "cd" * 32
+            path.write_text(json.dumps({"main": {"package_id": "com.xycz.simple_live",
+                                                "certificate_sha256": expected}}))
+            for label in ("SHA-256", "SHA256"):
+                for newline in ("\n", "\r\n"):
+                    report = newline.join(("Signer #1 certificate DN: private-subject",
+                        f"Signer #1 certificate {label} digest: {expected.upper()}",
+                        f"Signer #1 public key SHA-256 digest: {actual}",
+                        f"Source Stamp Signer certificate SHA-256 digest: {actual}", ""))
+                    self.assertEqual(verify_report("main", report, path), expected)
+            prefix = "Signer #1 certificate SHA-256 digest: "
+            self.assertEqual(verify_report("main", prefix + ":".join(["AB"] * 32), path), expected)
+            for report, message in (
+                (prefix + actual, f"actual SHA-256={actual}"),
+                (prefix + "private-sentinel", "unrecognized"),
+                (prefix + "ab", "malformed"),
+                (prefix + "\n" + expected, "unrecognized"),
+                (prefix + expected + "\n" + prefix + expected, "found 2"),
+                (f"Signer (minSdkVersion=33) certificate SHA-256 digest: {expected}", "unrecognized"),
+                (f"Signer #1 public key SHA-256 digest: {expected}", "found 0"),
+            ):
+                with self.subTest(message=message), self.assertRaises(ValueError) as caught:
+                    verify_report("main", report, path)
+                self.assertIn(message, str(caught.exception))
+                self.assertNotIn("private-sentinel", str(caught.exception))
+                self.assertNotIn("private-subject", str(caught.exception))
 
     def test_unified_workflow_keeps_independent_platforms_and_installers(self):
         workflow = (ROOT / ".github/workflows/fork_all_platforms.yml").read_text(encoding="utf-8")
