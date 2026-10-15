@@ -1,10 +1,10 @@
 {
   "main": {
     "package_id": "com.xycz.simple_live",
-    "certificate_sha256": ""
+    "certificate_sha256": "1BFC0A9303BF944681C574976B5685E1C0E740BC5C57F80978923372220E4678"
   },
   "tv": {
     "package_id": "com.xycz.simple_live_tv",
-    "certificate_sha256": ""
+    "certificate_sha256": "34393C6C01D9C0596730EA2845AF23191A05D23E698783B3F406063E9D55F1CD"
   }
 }
