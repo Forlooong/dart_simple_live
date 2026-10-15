@@ -162,6 +162,23 @@ class VersionTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "title does not match"):
             version.check_sync(self.root, "main")
 
+    def test_workflow_display_name_only_edit_allows_manual_rebuild(self):
+        self.change(version.WORKFLOW, self.workflow.read_text(encoding="utf-8").replace("name: build\n", "name: app build action\n", 1))
+        self.commit("Rename workflow display label")
+        for app in version.APPS:
+            version.check_changes(self.root, app, self.base)
+            version.check_history(self.root, app)
+            version.check_sync(self.root, app)
+        self.assertEqual(self.metadata()["package_version"], "1.12.3+11104")
+
+    def test_display_rename_cannot_hide_unversioned_source(self):
+        self.change("simple_live_app/lib/main.dart")
+        self.commit("Unversioned source change")
+        self.change(version.WORKFLOW, self.workflow.read_text(encoding="utf-8").replace("name: build\n", "name: app build action\n", 1))
+        self.commit("Rename workflow display label")
+        with self.assertRaisesRegex(ValueError, "main source changed"):
+            self.metadata()
+
     def test_deleted_installer_input_requires_bump(self):
         self.change("tool/package.py")
         version.update_versions(self.root, ("main", "tv"), bump=True)

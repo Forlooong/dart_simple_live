@@ -1,6 +1,6 @@
 # Unified installer builds and version management
 
-One workflow, `app-build-action-all-platforms` (`fork_all_platforms.yml`), runs on
+One workflow, `app build action` (`fork_all_platforms.yml`), runs on
 `master` pushes or manually. Its six independent jobs build Android, Android TV,
 iOS, macOS, Windows and Linux. A failed platform does not prevent the other jobs
 from completing. No tags or GitHub Releases are created.
@@ -29,7 +29,7 @@ edit the pubspec while increasing its build number, then run `sync main` or
 `sync tv`. Commands edit local files; they never commit or push.
 
 The guard covers application files, shared core/packages, build scripts, Actions
-and workflow packaging. Title-only workflow changes do not force a TV bump for a
+and workflow packaging. Top-level name/run-name display-only workflow changes do not force a TV bump for a
 main-only change. Documentation-only edits and rebuilds reuse the source version.
 Both push and manual builds check history: a failed unversioned change cannot be
 bypassed just by manually rebuilding or adding a documentation commit. If source

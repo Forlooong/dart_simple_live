@@ -1,6 +1,6 @@
 # Fork Android APK build
 
-The `app-build-action-all-platforms` workflow builds Android, Android TV, iOS,
+The `app build action` workflow builds Android, Android TV, iOS,
 macOS, Windows and Linux as independent jobs on `master` pushes and manual runs.
 It uploads installer files only and does not create tags or GitHub Releases.
 See [version management](fork-builds.md) before committing installer changes.

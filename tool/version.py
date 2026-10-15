@@ -15,6 +15,7 @@ WORKFLOW = ".github/workflows/fork_all_platforms.yml"
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\+([0-9]+)")
 VERSION_LINE = re.compile(r"^version: *(.*?) *$", re.MULTILINE)
 TITLE_LINE = re.compile(r"^run-name:.*$", re.MULTILINE)
+DISPLAY_LINE = re.compile(r"^(?:name|run-name):.*$", re.MULTILINE)
 ANDROID_ABI_OFFSET = 4000
 ANDROID_MAX_VERSION_CODE = 2100000000
 WINDOWS_MAX_COMPONENT = 65535
@@ -125,8 +126,9 @@ def input_changes(root, app, base, target=None):
     else:
         path = root / WORKFLOW
         after = path.read_text(encoding="utf-8") if path.exists() else ""
-    # The title contains both versions, so changing it alone is not a shared input change.
-    return TITLE_LINE.sub("run-name: <versions>", before) != TITLE_LINE.sub("run-name: <versions>", after)
+    # Top-level display labels do not change installers. Nested job/step names
+    # and all other workflow content remain guarded build inputs.
+    return DISPLAY_LINE.sub("<display metadata>", before) != DISPLAY_LINE.sub("<display metadata>", after)
 
 
 def check_changes(root, app, base):

@@ -6,7 +6,7 @@ until the applicable gates below have evidence for the **same full commit SHA**.
 
 ## Required evidence
 
-- All six independent jobs in `app-build-action-all-platforms` succeed on the
+- All six independent jobs in `app build action` succeed on the
   final SHA. Missing Android/TV signing keys are a blocker, not a successful build. A previous green run
   does not validate later source or packaging changes. Record workflow URLs,
   attempt numbers, artifact names and SHA-256 checksums.
