@@ -34,27 +34,39 @@ def verify_report(app, report, path=BASELINE):
     # Parse only certificate digests, never public-key digests or source stamps.
     # splitlines handles both LF and CRLF without allowing a value on another line.
     rows = [line for line in report.splitlines()
-            if re.match(r"^Signer.* certificate SHA-?256 digest:", line)]
+            if re.search(r" certificate SHA-?256 digest:", line)
+            and not line.startswith("Source Stamp Signer")]
     digests = []
+    schemes = set()
     for line in rows:
+        # Build-Tools 36 uses 'Signer #1'; 37 uses 'V2 Signer:'.
+        # Keep unknown schemes/rotation formats fail-closed, and never let
+        # a second signer or a second row for one scheme hide behind the first.
         match = re.fullmatch(
-            r"Signer #[0-9]+ certificate SHA-?256 digest:[ \t]*([0-9a-fA-F:]+)[ \t]*", line)
+            r"(?:(?P<legacy>Signer #(?P<old_number>[1-9][0-9]*))|"
+            r"(?P<scheme>V[12]) Signer(?: #(?P<number>[1-9][0-9]*))?:)"
+            r" certificate SHA-?256 digest:[ \t]*(?P<digest>[0-9a-fA-F:]+)[ \t]*", line)
         if not match:
             raise ValueError(f"{app}: unrecognized APK certificate report format; refusing upload")
+        scheme = match['scheme'] or 'legacy'
+        number = match['number'] or match['old_number'] or '1'
+        if number != '1' or scheme in schemes or (schemes and ('legacy' in schemes or scheme == 'legacy')):
+            raise ValueError(f"{app}: multiple or duplicate APK signers; refusing upload")
+        schemes.add(scheme)
         try:
-            digests.append(normalize(match[1]))
+            digests.append(normalize(match['digest']))
         except ValueError:
             raise ValueError(f"{app}: malformed APK certificate SHA-256; refusing upload") from None
-    if len(digests) != 1:
+    if not digests:
         raise ValueError(
             f"{app}: expected exactly one APK certificate SHA-256, found {len(digests)}; "
             "refusing upload")
-    if digests[0] != expected:
+    if any(digest != expected for digest in digests):
         # These are validated public certificate fingerprints only. Never echo
         # raw report text, certificate subjects, keys, passwords or environment.
         raise ValueError(
             f"{app}: APK signer does not match the pinned update baseline; "
-            f"expected SHA-256={expected}; actual SHA-256={digests[0]}; refusing upload")
+            f"expected SHA-256={expected}; actual SHA-256={','.join(digests)}; refusing upload")
     return expected
 
 

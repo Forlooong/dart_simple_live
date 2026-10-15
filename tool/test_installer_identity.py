@@ -42,7 +42,7 @@ class InstallerIdentityTest(unittest.TestCase):
             self.assertEqual(verify_report("main", report, path), digest)
             for bad, error in ((report.replace(digest, "cd" * 32), "does not match"),
                                ("", "found 0"),
-                               (report + report.replace("#1", "#2"), "found 2")):
+                               (report + report.replace("#1", "#2"), "multiple or duplicate")):
                 with self.assertRaisesRegex(ValueError, error):
                     verify_report("main", bad, path)
             baseline["main"]["certificate_sha256"] = ""
@@ -75,7 +75,7 @@ class InstallerIdentityTest(unittest.TestCase):
                 (prefix + "private-sentinel", "unrecognized"),
                 (prefix + "ab", "malformed"),
                 (prefix + "\n" + expected, "unrecognized"),
-                (prefix + expected + "\n" + prefix + expected, "found 2"),
+                (prefix + expected + "\n" + prefix + expected, "multiple or duplicate"),
                 (f"Signer (minSdkVersion=33) certificate SHA-256 digest: {expected}", "unrecognized"),
                 (f"Signer #1 public key SHA-256 digest: {expected}", "found 0"),
             ):
@@ -84,6 +84,36 @@ class InstallerIdentityTest(unittest.TestCase):
                 self.assertIn(message, str(caught.exception))
                 self.assertNotIn("private-sentinel", str(caught.exception))
                 self.assertNotIn("private-subject", str(caught.exception))
+
+    def test_real_build_tools_36_and_37_reports(self):
+        # Captured by official Google Build-Tools against the same existing
+        # debug-signed public test APK; no private key was needed for this test.
+        digest = "b1b6d235338403b8a8ae5c6047c52759b0702fc266655484d1c94ba4cf4df6cb"
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "baseline.json"
+            path.write_text(json.dumps({"tv": {"package_id": "com.xycz.simple_live_tv",
+                                              "certificate_sha256": digest}}))
+            for version in (36, 37):
+                report = (ROOT / f"tool/testdata/apksigner-{version}.txt").read_text()
+                self.assertEqual(verify_report("tv", report, path), digest)
+                with self.assertRaisesRegex(ValueError, "does not match"):
+                    verify_report("tv", report.replace(digest, "cd" * 32), path)
+
+    def test_all_scheme_certificates_must_match_one_identity(self):
+        digest, wrong = "ab" * 32, "cd" * 32
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "baseline.json"
+            path.write_text(json.dumps({"main": {"package_id": "com.xycz.simple_live",
+                                                "certificate_sha256": digest}}))
+            v1 = f"V1 Signer: certificate SHA-256 digest: {digest}\n"
+            v2 = f"V2 Signer: certificate SHA-256 digest: {digest}\n"
+            self.assertEqual(verify_report("main", v1 + v2, path), digest)
+            for report in (v1 + v2.replace(digest, wrong), v1 + v1, v2 + v2,
+                           v2 + v2.replace("Signer:", "Signer #2:"),
+                           v2 + v2.replace("V2", "V9"),
+                           v2 + f"Signer #1 certificate SHA-256 digest: {digest}"):
+                with self.assertRaises(ValueError):
+                    verify_report("main", report, path)
 
     def test_unified_workflow_keeps_independent_platforms_and_installers(self):
         workflow = (ROOT / ".github/workflows/fork_all_platforms.yml").read_text(encoding="utf-8")
