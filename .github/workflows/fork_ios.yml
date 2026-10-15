@@ -1,10 +1,10 @@
 name: app-build-action-ios
-run-name: "Release iOS · 1.12.5+11106 · #${{ github.run_number }}"
+run-name: "Release iOS · 1.12.10+11111 · #${{ github.run_number }}"
 
 on:
   workflow_dispatch:
   push:
-    branches: [master]
+    branches: [master, fix/known-issues-release]
     paths:
       - 'simple_live_app/**'
       - 'simple_live_core/**'

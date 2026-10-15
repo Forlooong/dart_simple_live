@@ -17,6 +17,7 @@ class FollowUserController extends BasePageController<FollowUser> {
   StreamSubscription<dynamic>? onUpdatedIndexedStream;
   StreamSubscription<dynamic>? onUpdatedListStream;
   final notificationUpdates = <String>{}.obs;
+  bool _closed = false;
 
   /// 0:全部 1:直播中 2:未直播
   var filterMode = FollowUserTag(id: "0", tag: "全部", userId: []).obs;
@@ -39,8 +40,10 @@ class FollowUserController extends BasePageController<FollowUser> {
         }
       },
     );
-    onUpdatedListStream =
-        FollowService.instance.updatedListStream.listen((event) {
+    onUpdatedListStream = FollowService.instance.updatedListStream.listen((
+      event,
+    ) {
+      updateTagList();
       filterData();
     });
     super.onInit();
@@ -48,9 +51,22 @@ class FollowUserController extends BasePageController<FollowUser> {
 
   @override
   Future refreshData() async {
+    if (_closed) return;
     await FollowService.instance.loadData();
+    if (_closed) return;
     updateTagList();
-    super.refreshData();
+    await loadData();
+  }
+
+  // Follows are one reactive snapshot, not an append-only paginated feed.
+  // A service event can arrive while BasePageController awaits getData; using
+  // that pagination path would append the same rooms a second time.
+  @override
+  Future<void> loadData() async {
+    if (_closed) return;
+    currentPage = 1;
+    filterData();
+    pageLoadding.value = false;
   }
 
   @override
@@ -81,6 +97,7 @@ class FollowUserController extends BasePageController<FollowUser> {
   }
 
   void filterData() {
+    if (_closed) return;
     if (filterMode.value.tag == "全部") {
       list.assignAll(FollowService.instance.followList.value);
     } else if (filterMode.value.tag == "直播中") {
@@ -91,6 +108,9 @@ class FollowUserController extends BasePageController<FollowUser> {
       FollowService.instance.filterDataByTag(filterMode.value);
       list.assignAll(FollowService.instance.curTagFollowList);
     }
+    pageEmpty.value = list.isEmpty;
+    pageError.value = false;
+    canLoadMore.value = false;
   }
 
   void setFilterMode(FollowUserTag tag) {
@@ -108,17 +128,17 @@ class FollowUserController extends BasePageController<FollowUser> {
     } catch (error, stackTrace) {
       Log.e('更新开播提醒失败: $error', stackTrace);
       final message = exceptionToString(error).trim();
-      SmartDialog.showToast(
-        message.isEmpty ? '暂时无法更新开播提醒，请稍后重试' : message,
-      );
+      SmartDialog.showToast(message.isEmpty ? '暂时无法更新开播提醒，请稍后重试' : message);
     } finally {
       notificationUpdates.remove(item.id);
     }
   }
 
-  void removeItem(FollowUser item) async {
-    var result =
-        await Utils.showAlertDialog("确定要取消关注${item.userName}吗?", title: "取消关注");
+  Future<void> removeItem(FollowUser item) async {
+    var result = await Utils.showAlertDialog(
+      "确定要取消关注${item.userName}吗?",
+      title: "取消关注",
+    );
     if (!result) {
       return;
     }
@@ -126,59 +146,85 @@ class FollowUserController extends BasePageController<FollowUser> {
     if (item.tag != "全部") {
       var tag = tagList.firstWhere((tag) => tag.tag == item.tag);
       tag.userId.remove(item.id);
-      updateTag(tag);
+      try {
+        await updateTag(tag);
+      } catch (error) {
+        SmartDialog.showToast("标签更新失败，请重试");
+        return;
+      }
     }
     await DBService.instance.followBox.delete(item.id);
     refreshData();
   }
 
-  void updateItem(FollowUser item) {
-    FollowService.instance.addFollow(item);
-  }
+  Future<void> updateItem(FollowUser item) =>
+      FollowService.instance.addFollow(item);
 
   // 修改item的标签
-  void setItemTag(FollowUser item, FollowUserTag targetTag) {
+  Future<void> setItemTag(FollowUser item, FollowUserTag targetTag) async {
     FollowUserTag tarTag = targetTag;
+    if (tarTag.tag != '全部' && !DBService.instance.getFollowTagExist(tarTag.id)) {
+      return;
+    }
     FollowUserTag curTag = tagList.firstWhere((tag) => tag.tag == item.tag);
     // 从当前标签（非全部）删除item 向目标标签(全部包含所有item == 非全部)添加item
     curTag.userId.remove(item.id);
     tarTag.userId.addIf(!tarTag.userId.contains(item.id), item.id);
     // 数据库更新
-    item.tag = tarTag.tag;
-    updateTag(curTag);
-    updateTag(tarTag);
-    updateItem(item);
-    filterData();
+    try {
+      await updateTag(curTag);
+      await updateTag(tarTag);
+      final currentTargets = DBService.instance.getFollowTagList().where(
+        (tag) => tag.id == tarTag.id,
+      );
+      item.tag = tarTag.tag == '全部' || currentTargets.isEmpty
+          ? '全部'
+          : currentTargets.first.tag;
+      await updateItem(item);
+      filterData();
+    } catch (error) {
+      SmartDialog.showToast("标签更新失败，请重试");
+    }
   }
 
   Future<void> removeTag(FollowUserTag tag) async {
-    // 将tag下的所有follow设置为全部
-    for (var i in tag.userId) {
-      var follow = DBService.instance.followBox.get(i);
-      if (follow != null) {
-        follow.tag = "全部";
-        updateItem(follow);
+    try {
+      // 将tag下的所有follow设置为全部
+      for (var i in tag.userId) {
+        var follow = DBService.instance.followBox.get(i);
+        if (follow != null) {
+          follow.tag = "全部";
+          await updateItem(follow);
+        }
       }
+      await FollowService.instance.delFollowUserTag(tag);
+      updateTagList();
+      Log.i('删除tag${tag.tag}');
+    } catch (error) {
+      SmartDialog.showToast("标签删除失败，请重试");
     }
-    await FollowService.instance.delFollowUserTag(tag);
-    updateTagList();
-    Log.i('删除tag${tag.tag}');
   }
 
-  void addTag(String tag) async {
-    FollowService.instance
-        .addFollowUserTag(tag)
-        .then((value) => updateTagList());
+  Future<void> addTag(String tag) async {
+    try {
+      await FollowService.instance.addFollowUserTag(tag);
+      if (!_closed) updateTagList();
+    } catch (error) {
+      SmartDialog.showToast("标签添加失败，请重试");
+    }
   }
 
-  void updateTag(FollowUserTag followUserTag) {
+  Future<void> updateTag(FollowUserTag followUserTag) async {
     if (followUserTag.tag == '全部') {
       return;
     }
-    FollowService.instance.updateFollowUserTag(followUserTag);
+    await FollowService.instance.updateFollowUserTag(followUserTag);
   }
 
-  void updateTagName(FollowUserTag followUserTag, String newTagName) {
+  Future<void> updateTagName(
+    FollowUserTag followUserTag,
+    String newTagName,
+  ) async {
     // 未操作
     if (followUserTag.tag == newTagName) {
       return;
@@ -189,32 +235,46 @@ class FollowUserController extends BasePageController<FollowUser> {
       return;
     }
     final FollowUserTag newTag = followUserTag.copyWith(tag: newTagName);
-    updateTag(newTag);
-    // update item's tag when update tagName
-    for (var i in newTag.userId) {
-      var follow = DBService.instance.followBox.get(i);
-      if (follow != null) {
-        follow.tag = newTagName;
-        updateItem(follow);
+    try {
+      await updateTag(newTag);
+      if (!DBService.instance.getFollowTagExist(newTag.id)) return;
+      // update item's tag when update tagName
+      for (var i in newTag.userId) {
+        var follow = DBService.instance.followBox.get(i);
+        if (follow != null) {
+          follow.tag = newTagName;
+          await updateItem(follow);
+        }
       }
+      SmartDialog.showToast("标签名修改成功");
+      updateTagList();
+    } catch (error) {
+      SmartDialog.showToast("标签更新失败，请重试");
     }
-    SmartDialog.showToast("标签名修改成功");
-    updateTagList();
   }
 
   // 调整标签顺序
-  void updateTagOrder(int oldIndex, int newIndex) {
+  Future<void> updateTagOrder(int oldIndex, int newIndex) async {
     if (newIndex > oldIndex) newIndex -= 1; // 处理索引调整
     final item = userTagList.removeAt(oldIndex);
     userTagList.insert(newIndex, item);
     tagList.value = tagList.take(3).toList();
     tagList.addAll(userTagList);
-    DBService.instance.updateFollowTagOrder(userTagList);
+    try {
+      await FollowService.instance.updateFollowTagOrder(userTagList.toList());
+    } catch (error) {
+      if (!_closed) {
+        updateTagList();
+        SmartDialog.showToast("标签排序保存失败，请重试");
+      }
+    }
   }
 
   @override
   void onClose() {
+    _closed = true;
     onUpdatedIndexedStream?.cancel();
+    onUpdatedListStream?.cancel();
     super.onClose();
   }
 }

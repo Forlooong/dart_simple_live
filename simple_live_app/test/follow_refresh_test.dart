@@ -56,18 +56,23 @@ void main() {
     settings = Get.put(AppSettingsController());
     settings.autoUpdateFollowEnable.value = false;
     site = _StatusSite();
-    Sites.allSites['test'] =
-        Site(id: 'test', name: 'test', logo: '', liveSite: site);
+    Sites.allSites['test'] = Site(
+      id: 'test',
+      name: 'test',
+      logo: '',
+      liveSite: site,
+    );
     rooms = List.generate(
-        12,
-        (i) => FollowUser(
-              id: 'test_$i',
-              roomId: '$i',
-              siteId: 'test',
-              userName: 'Room $i',
-              face: '',
-              addTime: DateTime(2026),
-            ));
+      12,
+      (i) => FollowUser(
+        id: 'test_$i',
+        roomId: '$i',
+        siteId: 'test',
+        userName: 'Room $i',
+        face: '',
+        addTime: DateTime(2026),
+      ),
+    );
     await database.followBox.putAll({for (final room in rooms) room.id: room});
     service = FollowService();
     service.onInit();
@@ -85,81 +90,188 @@ void main() {
     var completed = 0;
     while (service.updating.value) {
       while (completed < site.requests.length) {
-        site.requests[completed++]
-            .complete(const LiveRoomStatus(live: true, showTime: '100'));
+        site.requests[completed++].complete(
+          const LiveRoomStatus(live: true, showTime: '100'),
+        );
       }
       await Future<void>.delayed(Duration.zero);
     }
   }
 
-  test('20 refresh calls share one round; watch cap drains existing work',
-      () async {
-    final round = service.loadData();
-    final duplicates = List.generate(20, (_) => service.loadData());
-    expect(duplicates.every((future) => identical(future, round)), isTrue);
-    expect(site.requests, hasLength(4));
-    service.beginWatching();
-    site.requests[0].complete(const LiveRoomStatus(live: false));
-    site.requests[1].complete(const LiveRoomStatus(live: false));
-    await Future<void>.delayed(Duration.zero);
-    expect(site.requests, hasLength(4));
-    service.endWatching();
-    for (final request in site.requests.skip(2)) {
-      if (!request.isCompleted) {
-        request.complete(const LiveRoomStatus(live: true));
-      }
-    }
-    while (service.updating.value) {
+  test(
+    '20 refresh calls share one round; watch cap drains existing work',
+    () async {
+      final round = service.loadData();
+      final duplicates = List.generate(20, (_) => service.loadData());
+      expect(duplicates.every((future) => identical(future, round)), isTrue);
+      expect(site.requests, hasLength(4));
+      service.beginWatching();
+      site.requests[0].complete(const LiveRoomStatus(live: false));
+      site.requests[1].complete(const LiveRoomStatus(live: false));
       await Future<void>.delayed(Duration.zero);
-      for (final request in site.requests) {
+      expect(site.requests, hasLength(4));
+      service.endWatching();
+      for (final request in site.requests.skip(2)) {
         if (!request.isCompleted) {
           request.complete(const LiveRoomStatus(live: true));
         }
       }
-    }
-    await round;
-    expect(site.requests, hasLength(12));
-    expect(service.updatedCount, 12);
-    expect(service.updating.value, isFalse);
-  });
+      while (service.updating.value) {
+        await Future<void>.delayed(Duration.zero);
+        for (final request in site.requests) {
+          if (!request.isCompleted) {
+            request.complete(const LiveRoomStatus(live: true));
+          }
+        }
+      }
+      await round;
+      expect(site.requests, hasLength(12));
+      expect(service.updatedCount, 12);
+      expect(service.updating.value, isFalse);
+    },
+  );
 
-  test('removed room and old account results cannot update current list',
-      () async {
-    final round = service.loadData();
-    await database.followBox.delete(rooms.first.id);
-    await service.loadData(updateStatus: false);
-    site.invalidateStatusCache();
-    await finishRequests();
-    await round;
-    expect(rooms.every((room) => room.liveStatus.value == 0), isTrue);
-    expect(service.followList, hasLength(11));
-    expect(service.liveList, isEmpty);
-    expect(service.updating.value, isFalse);
-  });
+  test(
+    'removed room and old account results cannot update current list',
+    () async {
+      final round = service.loadData();
+      await database.followBox.delete(rooms.first.id);
+      await service.loadData(updateStatus: false);
+      site.invalidateStatusCache();
+      await finishRequests();
+      await round;
+      expect(rooms.every((room) => room.liveStatus.value == 0), isTrue);
+      expect(service.followList, hasLength(11));
+      expect(service.liveList, isEmpty);
+      expect(service.updating.value, isFalse);
+    },
+  );
 
-  test('background stops admission; failures clear refreshing state', () async {
-    final round = service.loadData();
-    service.didChangeAppLifecycleState(AppLifecycleState.resumed);
-    service.didChangeAppLifecycleState(AppLifecycleState.paused);
-    for (final request in site.requests) {
-      request.completeError(StateError('offline'));
-    }
-    await round;
-    expect(site.requests, hasLength(4));
-    expect(service.updating.value, isFalse);
-    expect(service.updatedCount, 4);
-    service.didChangeAppLifecycleState(AppLifecycleState.resumed);
-    final next = service.loadData();
-    var completed = 4;
-    while (service.updating.value) {
-      while (completed < site.requests.length) {
-        site.requests[completed++].complete(const LiveRoomStatus(live: false));
+  test(
+    'a refresh during polling reconciles persisted membership immediately',
+    () async {
+      final round = service.loadData();
+      await database.deleteFollow(rooms.first.id);
+      final added = FollowUser(
+        id: 'test_new',
+        roomId: 'new',
+        siteId: 'test',
+        userName: 'New room',
+        face: '',
+        addTime: DateTime(2026),
+      );
+      await database.addFollow(added);
+      final joined = service.loadData();
+      expect(identical(joined, round), isTrue);
+      expect(
+        service.followList.any((room) => room.id == rooms.first.id),
+        isFalse,
+      );
+      expect(
+        service.followList.where((room) => room.id == added.id),
+        hasLength(1),
+      );
+      await finishRequests();
+      await round;
+      expect(
+        service.followList.where((room) => room.id == added.id),
+        hasLength(1),
+      );
+      expect(rooms.first.liveStatus.value, 0);
+      expect(added.liveStatus.value, 2);
+      expect(site.requests, hasLength(13));
+    },
+  );
+
+  test(
+    'manual refresh resumes pending work with automatic polling off',
+    () async {
+      final round = service.loadData();
+      var settled = false;
+      round.then((_) => settled = true);
+      service.didChangeAppLifecycleState(AppLifecycleState.paused);
+      for (final request in site.requests) {
+        request.completeError(StateError('offline'));
       }
       await Future<void>.delayed(Duration.zero);
-    }
-    await next;
-    expect(service.notLiveList, hasLength(12));
+      expect(site.requests, hasLength(4));
+      expect(settled, isFalse);
+      expect(service.updating.value, isTrue);
+      expect(service.updatedCount, 4);
+      service.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      while (service.updating.value) {
+        for (final request in site.requests) {
+          if (!request.isCompleted) {
+            request.complete(const LiveRoomStatus(live: false));
+          }
+        }
+        await Future<void>.delayed(Duration.zero);
+      }
+      await round;
+      expect(site.requests, hasLength(12));
+      expect(service.notLiveList, hasLength(8));
+      expect(service.updatedCount, 12);
+    },
+  );
+
+  test('resume before active requests drain does not overlap rounds', () async {
+    final round = service.loadData();
+    service.didChangeAppLifecycleState(AppLifecycleState.paused);
+    service.didChangeAppLifecycleState(AppLifecycleState.resumed);
+    expect(site.requests, hasLength(4));
+    await finishRequests();
+    await round;
+    expect(site.requests, hasLength(12));
+    expect(service.liveList, hasLength(12));
   });
+
+  test('background manual calls wait without admitting requests', () async {
+    service.didChangeAppLifecycleState(AppLifecycleState.paused);
+    final round = service.loadData();
+    expect(site.requests, isEmpty);
+    expect(service.updating.value, isTrue);
+    service.didChangeAppLifecycleState(AppLifecycleState.resumed);
+    await finishRequests();
+    await round;
+    expect(site.requests, hasLength(12));
+  });
+
+  test('dispose settles paused waiters and ignores draining results', () async {
+    final round = service.loadData();
+    service.didChangeAppLifecycleState(AppLifecycleState.paused);
+    service.onClose();
+    await round;
+    for (final request in site.requests) {
+      request.complete(const LiveRoomStatus(live: true));
+    }
+    await Future<void>.delayed(Duration.zero);
+    expect(site.requests, hasLength(4));
+    expect(rooms.every((room) => room.liveStatus.value == 0), isTrue);
+  });
+
+  test(
+    'replacement imports join delta completion including read-only events',
+    () async {
+      final round = service.loadData();
+      final replacement = FollowUser(
+        id: rooms.first.id,
+        roomId: 'replacement',
+        siteId: 'test',
+        userName: 'Replacement',
+        face: '',
+        addTime: DateTime(2026),
+      );
+      await database.addFollow(replacement);
+      await service.loadData(updateStatus: false);
+      expect(identical(service.loadData(), round), isTrue);
+      await finishRequests();
+      await round;
+      expect(rooms.first.liveStatus.value, 0);
+      expect(replacement.liveStatus.value, 2);
+      expect(site.requests, hasLength(13));
+      expect(service.liveList, contains(replacement));
+    },
+  );
 
   test('legacy CPU-based concurrency migrates to bounded defaults', () {
     settings.updateFollowThreadCount.value = 0;
@@ -173,34 +285,36 @@ void main() {
     service.endWatching();
   });
 
-  testWidgets('several overdue background intervals coalesce into one refresh',
-      (tester) async {
-    service.onClose();
-    service = FollowService(now: tester.binding.clock.now);
-    settings.autoUpdateFollowEnable.value = true;
-    settings.autoUpdateFollowDuration.value = 1;
-    service.onInit();
-    service.didChangeAppLifecycleState(AppLifecycleState.resumed);
-    await tester.pump();
-    service.didChangeAppLifecycleState(AppLifecycleState.paused);
-    await tester.pump(const Duration(minutes: 3));
-    expect(site.requests, isEmpty);
-    service.didChangeAppLifecycleState(AppLifecycleState.resumed);
-    await tester.pump();
-    await tester.pump(Duration.zero);
-    expect(site.requests, hasLength(4));
-    while (service.updating.value) {
-      for (final request in site.requests) {
-        if (!request.isCompleted) {
-          request.complete(const LiveRoomStatus(live: false));
-        }
-      }
+  testWidgets(
+    'several overdue background intervals coalesce into one refresh',
+    (tester) async {
+      service.onClose();
+      service = FollowService(now: tester.binding.clock.now);
+      settings.autoUpdateFollowEnable.value = true;
+      settings.autoUpdateFollowDuration.value = 1;
+      service.onInit();
+      service.didChangeAppLifecycleState(AppLifecycleState.resumed);
       await tester.pump();
-    }
-    expect(site.requests, hasLength(12));
-    await tester.pump(const Duration(seconds: 59));
-    expect(site.requests, hasLength(12));
-    settings.autoUpdateFollowEnable.value = false;
-    service.initTimer();
-  });
+      service.didChangeAppLifecycleState(AppLifecycleState.paused);
+      await tester.pump(const Duration(minutes: 3));
+      expect(site.requests, isEmpty);
+      service.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      await tester.pump();
+      await tester.pump(Duration.zero);
+      expect(site.requests, hasLength(4));
+      while (service.updating.value) {
+        for (final request in site.requests) {
+          if (!request.isCompleted) {
+            request.complete(const LiveRoomStatus(live: false));
+          }
+        }
+        await tester.pump();
+      }
+      expect(site.requests, hasLength(12));
+      await tester.pump(const Duration(seconds: 59));
+      expect(site.requests, hasLength(12));
+      settings.autoUpdateFollowEnable.value = false;
+      service.initTimer();
+    },
+  );
 }

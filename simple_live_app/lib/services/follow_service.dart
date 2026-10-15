@@ -53,6 +53,13 @@ class FollowService extends GetxService with WidgetsBindingObserver {
   Timer? updateTimer;
   final _refreshQueue = StatusRefreshQueue();
   Future<void>? _refreshFuture;
+  Completer<void>? _refreshDone;
+  final _refreshSeen = HashSet<FollowUser>.identity();
+  final _refreshPending = LinkedHashSet<FollowUser>.identity();
+  bool _refreshDraining = false;
+  bool _refreshAutomatic = false;
+  List<String>? _pendingTagOrder;
+  int _tagOrderRevision = 0;
   Worker? _concurrencyWorker;
   DateTime? _nextRefresh;
   int _watchers = 0;
@@ -73,15 +80,18 @@ class FollowService extends GetxService with WidgetsBindingObserver {
   @override
   void onInit() {
     WidgetsBinding.instance.addObserver(this);
-    _foreground = WidgetsBinding.instance.lifecycleState == null ||
+    _foreground =
+        WidgetsBinding.instance.lifecycleState == null ||
         WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
     subscription = EventBus.instance.listen(Constant.kUpdateFollow, (p0) {
       loadData(updateStatus: false);
     });
-    _concurrencyWorker =
-        ever(AppSettingsController.instance.updateFollowThreadCount, (_) {
-      _refreshQueue.concurrency = getOptimalConcurrency();
-    });
+    _concurrencyWorker = ever(
+      AppSettingsController.instance.updateFollowThreadCount,
+      (_) {
+        _refreshQueue.concurrency = getOptimalConcurrency();
+      },
+    );
     initTimer();
     super.onInit();
   }
@@ -93,28 +103,55 @@ class FollowService extends GetxService with WidgetsBindingObserver {
       SmartDialog.showToast("标签名重复，修改失败");
       return;
     }
-    FollowUserTag item = await DBService.instance.addFollowTag(tag);
-    followTagList.add(item);
+    await DBService.instance.addFollowTag(tag);
+    if (!_closed) getAllTagList();
   }
 
   // 删除标签
   Future<void> delFollowUserTag(FollowUserTag tag) async {
-    followTagList.remove(tag);
     await DBService.instance.deleteFollowTag(tag.id);
+    if (!_closed) getAllTagList();
   }
 
   // 获取用户自定义标签列表
   void getAllTagList() {
     var list = DBService.instance.getFollowTagList();
+    final pending = _pendingTagOrder;
+    if (pending != null) {
+      final byId = {for (final item in list) item.id: item};
+      list = [
+        for (final id in pending)
+          if (byId.containsKey(id)) byId.remove(id)!,
+        ...byId.values,
+      ];
+    }
     followTagList.assignAll(list);
   }
 
+  Future<void> updateFollowTagOrder(List<FollowUserTag> tags) async {
+    final revision = ++_tagOrderRevision;
+    final snapshot = tags.toList();
+    _pendingTagOrder = snapshot.map((tag) => tag.id).toList();
+    followTagList.assignAll(snapshot);
+    try {
+      await DBService.instance.updateFollowTagOrder(snapshot);
+    } finally {
+      if (!_closed && revision == _tagOrderRevision) {
+        _pendingTagOrder = null;
+        getAllTagList();
+        filterData();
+      }
+    }
+  }
+
   // 修改标签
-  void updateFollowUserTag(FollowUserTag tag) {
-    DBService.instance.updateFollowTag(tag);
-    // 查找并修改
-    var index = followTagList.indexWhere((oTag) => oTag.id == tag.id);
-    followTagList[index] = tag;
+  Future<void> updateFollowUserTag(FollowUserTag tag) async {
+    await DBService.instance.updateFollowTag(tag);
+    if (_closed) return;
+    // The serialized write may have followed a deletion or another edit.
+    // Reconcile storage instead of reinserting an obsolete UI object.
+    getAllTagList();
+    filterData();
   }
 
   // 根据标签筛选数据
@@ -156,8 +193,9 @@ class FollowService extends GetxService with WidgetsBindingObserver {
   }
 
   Duration get _refreshInterval => Duration(
-      minutes: AppSettingsController.instance.autoUpdateFollowDuration.value
-          .clamp(1, 1440));
+    minutes: AppSettingsController.instance.autoUpdateFollowDuration.value
+        .clamp(1, 1440),
+  );
 
   void _scheduleRefresh() {
     updateTimer?.cancel();
@@ -184,20 +222,25 @@ class FollowService extends GetxService with WidgetsBindingObserver {
       if (_refreshQueue.isRunning) _nextRefresh = _now();
       _refreshQueue.pause();
     } else if (!wasForeground) {
-      // Join the draining round before scheduling the one due foreground refresh.
-      unawaited((_refreshFuture ?? Future<void>.value())
-          .whenComplete(_scheduleRefresh));
+      // An interrupted manual refresh must resume even with periodic polling off.
+      // Never await its completion here: it may be waiting for this foreground.
+      if (_refreshFuture != null) {
+        _nextRefresh = _now().add(_refreshInterval);
+        _pumpRefresh();
+      }
+      _scheduleRefresh();
     }
   }
 
   Future<void> loadData({bool updateStatus = true, bool automatic = false}) {
     if (_closed) return Future.value();
-    if (updateStatus && _refreshFuture != null) return _refreshFuture!;
     final list = DBService.instance.getFollowList();
     getAllTagList();
     followList.assignAll(list);
     filterData();
+    if (_refreshFuture != null) _enqueueRefreshMembers();
     if (!updateStatus || (automatic && !_foreground)) return Future.value();
+    // Always reconcile storage, even while an earlier status round drains.
     return startUpdateStatus(automatic: automatic);
   }
 
@@ -231,33 +274,96 @@ class FollowService extends GetxService with WidgetsBindingObserver {
   }
 
   Future<void> startUpdateStatus({bool automatic = false}) {
-    if (_refreshFuture != null) return _refreshFuture!;
+    if (_closed) return Future.value();
+    final activeRefresh = _refreshFuture;
+    if (activeRefresh != null) {
+      _enqueueRefreshMembers();
+      return activeRefresh;
+    }
     updatedCount = 0;
     updating.value = true;
+    _refreshAutomatic = automatic;
+    _refreshSeen.clear();
+    _refreshPending.clear();
+    final done = Completer<void>();
+    _refreshDone = done;
+    _refreshFuture = done.future;
+    _enqueueRefreshMembers();
+    return done.future;
+  }
+
+  void _enqueueRefreshMembers() {
+    for (final item in followList) {
+      if (_refreshSeen.add(item)) _refreshPending.add(item);
+    }
+    _pumpRefresh();
+  }
+
+  void _finishRefresh([Object? error, StackTrace? stack]) {
+    final done = _refreshDone;
+    _refreshDone = null;
+    _refreshFuture = null;
+    _refreshSeen.clear();
+    _refreshPending.clear();
+    if (!_closed) {
+      filterData();
+      updating.value = false;
+    }
+    if (done != null && !done.isCompleted) {
+      if (error == null) {
+        done.complete();
+      } else {
+        done.completeError(error, stack);
+      }
+    }
+  }
+
+  void _pumpRefresh() {
+    if (_closed || _refreshDone == null || _refreshDraining) return;
+    _refreshPending.removeWhere(
+      (item) =>
+          !followList.any((room) => identical(room, item)) ||
+          !identical(DBService.instance.followBox.get(item.id), item),
+    );
+    if (_refreshPending.isEmpty) {
+      _finishRefresh();
+      return;
+    }
+    if (!_foreground) return;
     final generation = _generation;
-    var completed = 0;
-    final snapshot = interleaveByPlatform(followList.toList());
+    final snapshot = interleaveByPlatform(_refreshPending.toList());
     final configurations = {
       for (final item in snapshot)
         item.siteId:
-            Sites.allSites[item.siteId]?.liveSite.statusConfigurationVersion
+            Sites.allSites[item.siteId]?.liveSite.statusConfigurationVersion,
     };
+    _refreshDraining = true;
     _refreshQueue.concurrency = getOptimalConcurrency();
-    final future = _refreshQueue.run(snapshot.map((item) => () async {
-          if (_closed || generation != _generation) return;
-          await updateLiveStatus(item,
-              automatic: automatic,
-              configurationVersion: configurations[item.siteId]);
-          if (!_closed && generation == _generation) updatedCount = ++completed;
-        }));
-    _refreshFuture = future.whenComplete(() {
-      _refreshFuture = null;
-      if (!_closed && generation == _generation) {
-        filterData();
-        updating.value = false;
-      }
-    });
-    return _refreshFuture!;
+    final future = _refreshQueue.run(
+      snapshot.map(
+        (item) => () async {
+          // Unadmitted tasks stay in the worklist when the queue is paused.
+          if (_closed || generation != _generation || !_foreground) return;
+          _refreshPending.remove(item);
+          await updateLiveStatus(
+            item,
+            automatic: _refreshAutomatic,
+            configurationVersion: configurations[item.siteId],
+          );
+          if (!_closed && generation == _generation) updatedCount++;
+        },
+      ),
+    );
+    future.then(
+      (_) {
+        _refreshDraining = false;
+        if (!_closed && generation == _generation) _pumpRefresh();
+      },
+      onError: (Object error, StackTrace stack) {
+        _refreshDraining = false;
+        if (!_closed && generation == _generation) _finishRefresh(error, stack);
+      },
+    );
   }
 
   Future<void> updateLiveStatus(
@@ -276,7 +382,9 @@ class FollowService extends GetxService with WidgetsBindingObserver {
     if (!current()) return;
     try {
       final status = await site.getRoomStatusCached(
-          roomId: item.roomId, automatic: automatic);
+        roomId: item.roomId,
+        automatic: automatic,
+      );
       if (!current()) return;
       item.liveStatus.value = status.live ? 2 : 1;
       item.liveStartTime = status.live ? status.showTime : null;
@@ -319,7 +427,8 @@ class FollowService extends GetxService with WidgetsBindingObserver {
         return;
       }
       var jsonFile = File(
-          '$dir/SimpleLive_${DateTime.now().millisecondsSinceEpoch ~/ 1000}.json');
+        '$dir/SimpleLive_${DateTime.now().millisecondsSinceEpoch ~/ 1000}.json',
+      );
       var jsonText = generateJson();
       await jsonFile.writeAsString(jsonText);
       SmartDialog.showToast("已导出关注列表");
@@ -365,9 +474,7 @@ class FollowService extends GetxService with WidgetsBindingObserver {
         title: const Text("导出为文本"),
         content: TextField(
           controller: TextEditingController(text: content),
-          decoration: const InputDecoration(
-            border: OutlineInputBorder(),
-          ),
+          decoration: const InputDecoration(border: OutlineInputBorder()),
           minLines: 5,
           maxLines: 8,
         ),
@@ -469,9 +576,11 @@ class FollowService extends GetxService with WidgetsBindingObserver {
 
   @override
   void onClose() {
+    if (_closed) return;
     _closed = true;
     _generation++;
     _refreshQueue.pause();
+    _finishRefresh();
     _concurrencyWorker?.dispose();
     WidgetsBinding.instance.removeObserver(this);
     updateTimer?.cancel();

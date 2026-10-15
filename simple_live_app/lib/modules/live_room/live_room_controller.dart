@@ -599,6 +599,13 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       liveStatus.value = detail.value!.status || detail.value!.isRecord;
       if (liveStatus.value) {
         getPlayQualites(generation);
+      } else {
+        // A manual refresh can confirm that the current stream is offline.
+        // Invalidating its URL state alone does not unload native playback.
+        await runPlayerCommand(() async {
+          if (_isCurrentRoom(generation)) await player.stop();
+        });
+        if (!_isCurrentRoom(generation)) return;
       }
       if (detail.value!.isRecord) {
         addSysMsg("当前主播未开播，正在轮播录像");
@@ -756,6 +763,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       // CDN alternatives are not consecutive programmes. Keep libmpv from
       // advancing to another line independently of application recovery.
       // open() also avoids jump() -> play() -> seek(0) on an ended live FLV.
+      playbackDiagnostics.opened();
       await player.open(media);
     });
   }
@@ -849,6 +857,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         // replacing it, and avoid repeatedly rebuilding the native decoder.
         await Future<void>.delayed(const Duration(milliseconds: 300));
         if (!_isCurrentPlayback(room, playback)) return;
+        playbackDiagnostics.recoveryAttempt();
         Log.i("播放恢复：第 $attempt 次，重新获取直播地址");
         try {
           if (!await _refreshPlaybackSource(room, playback)) return;
@@ -990,12 +999,12 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   }
 
   /// 关注用户
-  void followUser() {
+  Future<void> followUser() async {
     if (detail.value == null) {
       return;
     }
     var id = "${site.id}_$roomId";
-    DBService.instance.addFollow(
+    await DBService.instance.addFollow(
       FollowUser(
         id: id,
         roomId: roomId,
@@ -1019,7 +1028,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     }
 
     var id = "${site.id}_$roomId";
-    DBService.instance.deleteFollow(id);
+    await DBService.instance.deleteFollow(id);
     followed.value = false;
     EventBus.instance.emit(Constant.kUpdateFollow, id);
   }
