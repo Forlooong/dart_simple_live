@@ -184,13 +184,46 @@ jobs:
           cat FLUTTER-VERSION.txt >> BUILD-INFO.txt
           printf '%s\n' "Android TV $APP_VERSION · arm32 / arm64 / x64 · $SIGNING_LABEL" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload installable APKs
+      - name: Upload arm64 APK
+        id: upload_arm64
         uses: actions/upload-artifact@v7
         with:
-          name: Simple-Live-${{ steps.metadata.outputs.artifact_version }}-Android-TV-Release-${{ steps.signing.outputs.label }}
-          path: simple_live_tv_app/build/apk-artifacts/
+          path: simple_live_tv_app/build/apk-artifacts/Simple-Live-${{ steps.metadata.outputs.artifact_version }}-Android-TV-arm64-${{ steps.signing.outputs.label }}.apk
+          archive: false
           if-no-files-found: error
           retention-days: 14
+
+      - name: Upload arm32 APK
+        id: upload_arm32
+        uses: actions/upload-artifact@v7
+        with:
+          path: simple_live_tv_app/build/apk-artifacts/Simple-Live-${{ steps.metadata.outputs.artifact_version }}-Android-TV-arm32-${{ steps.signing.outputs.label }}.apk
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload x64 APK
+        id: upload_x64
+        uses: actions/upload-artifact@v7
+        with:
+          path: simple_live_tv_app/build/apk-artifacts/Simple-Live-${{ steps.metadata.outputs.artifact_version }}-Android-TV-x64-${{ steps.signing.outputs.label }}.apk
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Summarize APK downloads
+        env:
+          ARM64_URL: ${{ steps.upload_arm64.outputs.artifact-url }}
+          ARM32_URL: ${{ steps.upload_arm32.outputs.artifact-url }}
+          X64_URL: ${{ steps.upload_x64.outputs.artifact-url }}
+        run: |
+          {
+            printf '[Download arm64 APK](%s) · [Download arm32 APK](%s) · [Download x64 APK](%s)\n\n' "$ARM64_URL" "$ARM32_URL" "$X64_URL"
+            printf '%s\n' 'Sign in to GitHub and download the APK matching your device; no outer ZIP extraction is needed.' ''
+            cat build/apk-artifacts/BUILD-INFO.txt
+            printf '\nSHA-256 checksums:\n'
+            cat build/apk-artifacts/SHA256SUMS.txt
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Remove temporary release signing files
         if: always()

@@ -81,14 +81,29 @@ jobs:
           test -d "$app"
           lipo "$app/Contents/MacOS/Simple Live" -verify_arch arm64 x86_64
           mkdir -p build/artifacts
-          ditto -c -k --sequesterRsrc --keepParent "$app" "build/artifacts/Simple-Live-${APP_VERSION}-macOS-universal-Unsigned.zip"
-          unzip -t build/artifacts/*.zip
-          (cd build/artifacts && shasum -a 256 *.zip > SHA256SUMS.txt)
-          printf '%s\n' "macOS $APP_VERSION · arm64 + x64 · unsigned ZIP" 'Not notarized; macOS may prevent opening this build.' >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p build/dmg-root
+          ditto "$app" 'build/dmg-root/Simple Live.app'
+          ln -s /Applications build/dmg-root/Applications
+          dmg="build/artifacts/Simple-Live-${APP_VERSION}-macOS-universal-Unsigned.dmg"
+          hdiutil create -volname 'Simple Live' -srcfolder build/dmg-root -ov -format UDZO "$dmg"
+          hdiutil verify "$dmg"
+          mountpoint="$RUNNER_TEMP/simple-live-dmg"
+          mkdir -p "$mountpoint"
+          hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mountpoint"
+          trap 'hdiutil detach "$mountpoint"' EXIT
+          python ../tool/verify_native_bundle.py macos "$mountpoint/Simple Live.app"
+          test "$(readlink "$mountpoint/Applications")" = /Applications
+          lipo "$mountpoint/Simple Live.app/Contents/MacOS/Simple Live" -verify_arch arm64 x86_64
+          hdiutil detach "$mountpoint"
+          trap - EXIT
+          (cd build/artifacts && shasum -a 256 *.dmg > SHA256SUMS.txt)
+          printf '%s\n' "macOS $APP_VERSION · arm64 + x64 · unsigned DMG" 'Open the DMG and drag Simple Live to Applications. Not notarized; macOS may prevent opening this build.' >> "$GITHUB_STEP_SUMMARY"
+          cat build/artifacts/SHA256SUMS.txt >> "$GITHUB_STEP_SUMMARY"
       - name: Upload macOS package
         uses: actions/upload-artifact@v7
         with:
           name: Simple-Live-${{ steps.metadata.outputs.artifact_version }}-macOS-universal-Unsigned
-          path: simple_live_app/build/artifacts/
+          path: simple_live_app/build/artifacts/*.dmg
+          archive: false
           if-no-files-found: error
           retention-days: 14

@@ -59,30 +59,73 @@ jobs:
         run: flutter build windows --release --no-pub
       - name: Load bundled native ABI
         run: python ../tool/verify_native_bundle.py windows build/windows/x64/runner/Release
-      - name: Package portable Windows app
+      - name: Package and verify Windows installer
         shell: pwsh
         env:
           APP_VERSION: ${{ steps.metadata.outputs.artifact_version }}
+          VERSION_NAME: ${{ steps.metadata.outputs.version }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $bundle = 'build/windows/x64/runner/Release'
+          $bundle = (Resolve-Path 'build/windows/x64/runner/Release').Path
           if (!(Test-Path "$bundle/simple_live_app.exe")) { throw 'Windows executable is missing' }
+          $compiler = "${env:ProgramFiles(x86)}/Inno Setup 6/ISCC.exe"
+          if (!(Test-Path $compiler)) { throw 'Preinstalled Inno Setup compiler is missing' }
           New-Item -ItemType Directory -Force build/artifacts | Out-Null
-          $archive = "build/artifacts/Simple-Live-$env:APP_VERSION-Windows-x64-Unsigned.zip"
-          Compress-Archive -Path "$bundle/*" -DestinationPath $archive
-          $hash = Get-FileHash $archive -Algorithm SHA256
-          "$($hash.Hash.ToLower())  $([IO.Path]::GetFileName($archive))" | Set-Content build/artifacts/SHA256SUMS.txt
+          $output = (Resolve-Path 'build/artifacts').Path
+          $basename = "Simple-Live-$env:APP_VERSION-Windows-x64-Setup-Unsigned"
+          $notice = Join-Path $output 'INSTALL-NOTES.txt'
           @(
-            "Commit: $env:GITHUB_SHA"
-            'Unsigned portable Windows x64 build. Extract the entire archive before running.'
+            'Unsigned Simple Live installer. Windows may show an unknown-publisher warning.'
             'Requires Microsoft Visual C++ 2015-2022 Redistributable (x64).'
             'https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist'
-          ) | Set-Content build/artifacts/BUILD-INFO.txt
-          "Windows $env:APP_VERSION · x64 · unsigned portable ZIP. Extract fully; requires Microsoft Visual C++ x64 runtime." >> $env:GITHUB_STEP_SUMMARY
+            'Installs for the current user. Existing application data is not removed.'
+          ) | Set-Content -Encoding utf8 $notice
+          @"
+          [Setup]
+          AppId=com.xycz.simplelive
+          AppName=Simple Live
+          AppVersion=$env:VERSION_NAME
+          DefaultDirName={localappdata}\Programs\Simple Live
+          DefaultGroupName=Simple Live
+          PrivilegesRequired=lowest
+          ArchitecturesAllowed=x64compatible
+          ArchitecturesInstallIn64BitMode=x64compatible
+          OutputDir=$output
+          OutputBaseFilename=$basename
+          Compression=lzma2
+          SolidCompression=yes
+          WizardStyle=modern
+          UninstallDisplayIcon={app}\simple_live_app.exe
+          InfoBeforeFile=$notice
+          [Files]
+          Source: "$bundle\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+          [Icons]
+          Name: "{group}\Simple Live"; Filename: "{app}\simple_live_app.exe"; WorkingDir: "{app}"
+          "@ | Set-Content -Encoding utf8 build/installer.iss
+          & $compiler build/installer.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compilation failed' }
+          $installer = Join-Path $output "$basename.exe"
+          if (!(Test-Path $installer)) { throw 'Installer is missing' }
+          $installed = Join-Path $env:RUNNER_TEMP 'simple-live-installer-check'
+          $process = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=`"$installed`"") -PassThru -Wait
+          if ($process.ExitCode -ne 0) { throw "Installer exited $($process.ExitCode)" }
+          Get-ChildItem $bundle -Recurse -File | ForEach-Object {
+            $relative = [IO.Path]::GetRelativePath($bundle, $_.FullName)
+            $copy = Join-Path $installed $relative
+            if (!(Test-Path $copy) -or (Get-FileHash $_.FullName).Hash -ne (Get-FileHash $copy).Hash) {
+              throw "Installed bundle differs: $relative"
+            }
+          }
+          python ../tool/verify_native_bundle.py windows "$installed"
+          if ($LASTEXITCODE -ne 0) { throw 'Installed native bundle verification failed' }
+          $hash = Get-FileHash $installer -Algorithm SHA256
+          "Windows $env:APP_VERSION · x64 · unsigned installer EXE. Requires Microsoft Visual C++ x64 runtime." >> $env:GITHUB_STEP_SUMMARY
+          "$($hash.Hash.ToLower())  $basename.exe" >> $env:GITHUB_STEP_SUMMARY
       - name: Upload Windows package
         uses: actions/upload-artifact@v7
         with:
           name: Simple-Live-${{ steps.metadata.outputs.artifact_version }}-Windows-x64-Unsigned
-          path: simple_live_app/build/artifacts/
+          path: simple_live_app/build/artifacts/*.exe
+          archive: false
           if-no-files-found: error
           retention-days: 14

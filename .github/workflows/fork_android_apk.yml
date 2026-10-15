@@ -214,46 +214,45 @@ jobs:
             > BUILD-INFO.txt
           cat FLUTTER-VERSION.txt >> BUILD-INFO.txt
 
-      - name: Upload installable APKs
-        id: upload
-        uses: actions/upload-artifact@v7
-        with:
-          name: Simple-Live-${{ steps.metadata.outputs.artifact_version }}-Android-Release-${{ steps.signing.outputs.label }}
-          path: simple_live_app/build/apk-artifacts/
-          if-no-files-found: error
-          retention-days: 14
-
       - name: Upload arm64 APK
         id: upload_arm64
         uses: actions/upload-artifact@v7
         with:
-          name: Simple-Live-${{ steps.metadata.outputs.artifact_version }}-Android-arm64-${{ steps.signing.outputs.label }}
-          path: |
-            simple_live_app/build/apk-artifacts/Simple-Live-${{ steps.metadata.outputs.artifact_version }}-Android-arm64-${{ steps.signing.outputs.label }}.apk
-            simple_live_app/build/apk-artifacts/arm64-SHA256SUMS.txt
-            simple_live_app/build/apk-artifacts/arm64-v8a-SIGNING-CERT.txt
-            simple_live_app/build/apk-artifacts/arm64-v8a-VERSION.txt
-            simple_live_app/build/apk-artifacts/BUILD-INFO.txt
+          path: simple_live_app/build/apk-artifacts/Simple-Live-${{ steps.metadata.outputs.artifact_version }}-Android-arm64-${{ steps.signing.outputs.label }}.apk
+          archive: false
           if-no-files-found: error
           retention-days: 14
 
-      - name: Summarize Android download
+      - name: Upload arm32 APK
+        id: upload_arm32
+        uses: actions/upload-artifact@v7
+        with:
+          path: simple_live_app/build/apk-artifacts/Simple-Live-${{ steps.metadata.outputs.artifact_version }}-Android-arm32-${{ steps.signing.outputs.label }}.apk
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload x64 APK
+        id: upload_x64
+        uses: actions/upload-artifact@v7
+        with:
+          path: simple_live_app/build/apk-artifacts/Simple-Live-${{ steps.metadata.outputs.artifact_version }}-Android-x64-${{ steps.signing.outputs.label }}.apk
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Summarize APK downloads
         env:
-          APP_VERSION: ${{ steps.metadata.outputs.artifact_version }}
-          SIGNING_LABEL: ${{ steps.signing.outputs.label }}
-          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
-          ARM64_ARTIFACT_URL: ${{ steps.upload_arm64.outputs.artifact-url }}
+          ARM64_URL: ${{ steps.upload_arm64.outputs.artifact-url }}
+          ARM32_URL: ${{ steps.upload_arm32.outputs.artifact-url }}
+          X64_URL: ${{ steps.upload_x64.outputs.artifact-url }}
         run: |
           {
-            printf '## Simple Live %s · Android\n\n' "$APP_VERSION"
-            printf '[Download arm64 APK](%s) (%s, ZIP archive for arm64-v8a devices).\n\n' "$ARM64_ARTIFACT_URL" "$SIGNING_LABEL"
-            printf '[Download all APKs](%s) (%s). Sign in to GitHub, download and unzip the artifact, then install one APK matching your device.\n\n' "$ARTIFACT_URL" "$SIGNING_LABEL"
-            printf '%s\n' \
-              '- arm64: 64-bit ARM devices (arm64-v8a).' \
-              '- arm32: 32-bit ARM devices (armeabi-v7a).' \
-              '- x64: 64-bit Intel/AMD devices or emulators (x86_64).' \
-              '' \
-              'TestSigned builds use an ephemeral key and cannot update any installation with a different certificate, including the known 1.12.5 build. Keep the old app. Main-app follows and settings require separate exports; verify both outside the app before choosing migration. Nothing uninstalls automatically.'
+            printf '[Download arm64 APK](%s) · [Download arm32 APK](%s) · [Download x64 APK](%s)\n\n' "$ARM64_URL" "$ARM32_URL" "$X64_URL"
+            printf '%s\n' 'Sign in to GitHub and download the APK matching your device; no outer ZIP extraction is needed.' ''
+            cat build/apk-artifacts/BUILD-INFO.txt
+            printf '\nSHA-256 checksums:\n'
+            cat build/apk-artifacts/SHA256SUMS.txt
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Remove temporary release signing files
