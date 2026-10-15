@@ -1,0 +1,877 @@
+name: app-build-action-all-platforms
+run-name: "Build all platforms · Main 1.12.11+11112 · TV 1.7.2+10607 · #${{ github.run_number }}"
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-all-platforms-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android-apk:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: simple_live_app
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Check version and prepare build identity
+        id: metadata
+        run: python ../tool/version.py metadata main
+      - name: Test version management
+        run: python -B -m unittest discover -s ../tool -p test_version.py
+      - name: Test installer identity and signing guards
+        run: python -B -m unittest discover -s ../tool -p test_installer_identity.py
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.38.10'
+          channel: stable
+          cache: true
+      - name: Set up Rust native targets
+        uses: ./.github/actions/setup-native
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+      - name: Restore packages
+        run: flutter pub get --enforce-lockfile
+      - uses: ./.github/actions/check-native
+
+      - name: Check player and notification code
+        run: |
+          flutter analyze --no-pub --no-fatal-infos \
+            lib/modules/live_room/live_room_controller.dart \
+            lib/modules/live_room/player/player_controller.dart \
+            lib/modules/live_room/player/playback_diagnostics.dart \
+            lib/modules/live_room/player/player_command_queue.dart \
+            lib/routes/app_navigation.dart \
+            lib/services/live_notification_service.dart \
+            lib/services/live_notifications \
+            lib/services/follow_import.dart \
+            lib/services/follow_service.dart \
+            lib/services/db_service.dart \
+            lib/main.dart \
+            lib/models/db/follow_user.dart \
+            lib/modules/follow_user \
+            lib/widgets/follow_user_item.dart
+
+      - name: Test player lifecycle and live notifications
+        run: >-
+          flutter test --no-pub
+          test/player_command_queue_test.dart
+          test/live_room_lifecycle_test.dart
+          test/live_playback_recovery_test.dart
+          test/playback_diagnostics_test.dart
+          test/danmaku_lifecycle_test.dart
+          test/chat_message_buffer_test.dart
+          test/danmaku_rule_validation_test.dart
+          test/follow_refresh_test.dart
+          test/db_follow_tag_test.dart
+          test/follow_user_controller_test.dart
+          test/follow_notification_preferences_test.dart
+          test/live_status_validation_test.dart
+          test/live_notification_runner_test.dart
+          test/notification_navigation_test.dart
+          test/live_notification_service_test.dart
+
+      - name: Validate public signing baseline
+        run: python ../tool/verify_apk_signer.py main
+
+      - name: Configure APK signing
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          names = ('KEYSTORE_BASE64', 'STORE_PASSWORD', 'KEY_PASSWORD', 'KEY_ALIAS')
+          present = [bool(os.environ.get(name)) for name in names]
+          if any(present) and not all(present):
+              raise SystemExit('Release signing secrets are incomplete; refusing to fall back silently.')
+
+          if all(present):
+              os.umask(0o077)
+              keystore = Path(os.environ['RUNNER_TEMP']) / 'simple-live-release.jks'
+              try:
+                  keystore.write_bytes(base64.b64decode(
+                      ''.join(os.environ['KEYSTORE_BASE64'].split()), validate=True))
+              except ValueError:
+                  raise SystemExit('KEYSTORE_BASE64 is not valid base64.') from None
+
+              # Java Properties accepts Unicode escapes. Encode every UTF-16 unit
+              # so spaces, backslashes and punctuation in secrets remain literal.
+              def escape(value):
+                  raw = value.encode('utf-16-be')
+                  return ''.join('\\u%04x' % int.from_bytes(raw[i:i+2], 'big')
+                                 for i in range(0, len(raw), 2))
+
+              properties = {
+                  'storeFile': str(keystore),
+                  'storePassword': os.environ['STORE_PASSWORD'],
+                  'keyPassword': os.environ['KEY_PASSWORD'],
+                  'keyAlias': os.environ['KEY_ALIAS'],
+              }
+              Path('android/key.properties').write_text(''.join(
+                  key + '=' + escape(value) + '\n' for key, value in properties.items()))
+              mode = 'release-signed'
+          else:
+              raise SystemExit(
+                  'Stable release signing is required. Configure the persistent signing key '
+                  'for the chosen update baseline; CI will not generate a replacement '
+                  'or publish an ephemeral TestSigned APK. A new key cannot update an old app.')
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('mode=' + mode + '\n')
+              output.write('label=ReleaseSigned' + '\n')
+          PY
+
+      - name: Build release APKs
+        # Flutter 3.38 needs its pub phase to regenerate release-only plugin
+        # registration after tests; --no-pub retains integration_test references.
+        run: flutter build apk --release --split-per-abi
+      - name: Verify every native library, ABI and APK ZIP alignment
+        run: |
+          set -euo pipefail
+          python ../tool/verify_native_bundle.py android build/app/outputs/flutter-apk
+          sdk_root="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          zipalign="$(find "$sdk_root/build-tools" -name zipalign -type f | sort -V | tail -n 1)"
+          test -x "$zipalign"
+          for apk in build/app/outputs/flutter-apk/app-*-release.apk; do
+            "$zipalign" -c -P 16 4 "$apk"
+          done
+
+      - name: Verify APK signatures and prepare artifacts
+        env:
+          SIGNING_MODE: ${{ steps.signing.outputs.mode }}
+          SIGNING_LABEL: ${{ steps.signing.outputs.label }}
+          APP_VERSION: ${{ steps.metadata.outputs.artifact_version }}
+          PACKAGE_VERSION: ${{ steps.metadata.outputs.package_version }}
+          VERSION_NAME: ${{ steps.metadata.outputs.version }}
+          BUILD_NUMBER: ${{ steps.metadata.outputs.build_number }}
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          apksigner="$(find "$sdk_root/build-tools" -name apksigner -type f | sort -V | tail -n 1)"
+          test -n "$apksigner"
+          aapt2="$(dirname "$apksigner")/aapt2"
+          test -x "$aapt2"
+          mkdir -p build/apk-artifacts
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            apk="build/app/outputs/flutter-apk/app-${abi}-release.apk"
+            test -s "$apk"
+            "$apksigner" verify --print-certs "$apk" > "build/apk-artifacts/${abi}-SIGNING-CERT.txt"
+            python ../tool/verify_apk_signer.py main "build/apk-artifacts/${abi}-SIGNING-CERT.txt"
+            case "$abi" in
+              arm64-v8a) arch=arm64; offset=2000 ;;
+              armeabi-v7a) arch=arm32; offset=1000 ;;
+              x86_64) arch=x64; offset=4000 ;;
+            esac
+            badging="$("$aapt2" dump badging "$apk")"
+            actual_package="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<< "$badging")"
+            actual_name="$(sed -n "s/^package:.* versionName='\([^']*\)'.*/\1/p" <<< "$badging")"
+            actual_code="$(sed -n "s/^package:.* versionCode='\([^']*\)'.*/\1/p" <<< "$badging")"
+            expected_code=$((BUILD_NUMBER + offset))
+            if [[ "$actual_package" != "com.xycz.simple_live" || "$actual_name" != "$VERSION_NAME" || "$actual_code" != "$expected_code" ]]; then
+              echo "::error::$abi APK version $actual_name+$actual_code does not match source $PACKAGE_VERSION (expected ABI code $expected_code)"
+              exit 1
+            fi
+            printf 'Source: %s\nAPK: %s+%s\n' "$PACKAGE_VERSION" "$actual_name" "$actual_code" > "build/apk-artifacts/${abi}-VERSION.txt"
+            cp "$apk" "build/apk-artifacts/Simple-Live-${APP_VERSION}-Android-${arch}-${SIGNING_LABEL}.apk"
+          done
+          cp pubspec.lock build/apk-artifacts/pubspec.lock
+          flutter --version > build/apk-artifacts/FLUTTER-VERSION.txt
+          cd build/apk-artifacts
+          sha256sum *.apk > SHA256SUMS.txt
+          sha256sum "Simple-Live-${APP_VERSION}-Android-arm64-${SIGNING_LABEL}.apk" > arm64-SHA256SUMS.txt
+          printf '%s\n' \
+            "Source version: $PACKAGE_VERSION" \
+            "Artifact version: $APP_VERSION" \
+            "Commit: $GITHUB_SHA" \
+            "Signing: $SIGNING_MODE" \
+            'Build mode: release' \
+            'Package: com.xycz.simple_live' \
+            'In-place updates require the same application ID, signing identity and ABI, with a higher version code.' \
+            'Keep the existing app and data until you explicitly choose a migration; no uninstall is automatic.' \
+            'Main app: export follows separately from settings; settings export does not include follows.' \
+            'Verify both backups outside the app before any user-chosen uninstall; uninstall deletes local data.' \
+            'The configured key must match the installed app; CI cannot recover a lost historical private key.' \
+            > BUILD-INFO.txt
+          cat FLUTTER-VERSION.txt >> BUILD-INFO.txt
+
+      - name: Upload arm64 APK
+        id: upload_arm64
+        uses: actions/upload-artifact@v7
+        with:
+          path: simple_live_app/build/apk-artifacts/Simple-Live-${{ steps.metadata.outputs.artifact_version }}-Android-arm64-${{ steps.signing.outputs.label }}.apk
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload arm32 APK
+        id: upload_arm32
+        uses: actions/upload-artifact@v7
+        with:
+          path: simple_live_app/build/apk-artifacts/Simple-Live-${{ steps.metadata.outputs.artifact_version }}-Android-arm32-${{ steps.signing.outputs.label }}.apk
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload x64 APK
+        id: upload_x64
+        uses: actions/upload-artifact@v7
+        with:
+          path: simple_live_app/build/apk-artifacts/Simple-Live-${{ steps.metadata.outputs.artifact_version }}-Android-x64-${{ steps.signing.outputs.label }}.apk
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Summarize APK downloads
+        env:
+          ARM64_URL: ${{ steps.upload_arm64.outputs.artifact-url }}
+          ARM32_URL: ${{ steps.upload_arm32.outputs.artifact-url }}
+          X64_URL: ${{ steps.upload_x64.outputs.artifact-url }}
+        run: |
+          {
+            printf '[Download arm64 APK](%s) · [Download arm32 APK](%s) · [Download x64 APK](%s)\n\n' "$ARM64_URL" "$ARM32_URL" "$X64_URL"
+            printf '%s\n' 'Sign in to GitHub and download the APK matching your device; no outer ZIP extraction is needed.' ''
+            cat build/apk-artifacts/BUILD-INFO.txt
+            printf '\nSHA-256 checksums:\n'
+            cat build/apk-artifacts/SHA256SUMS.txt
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove temporary release signing files
+        if: always()
+        run: |
+          rm -f android/key.properties "$RUNNER_TEMP/simple-live-release.jks"
+
+  tv-apk:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: simple_live_tv_app
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Check version and prepare build identity
+        id: metadata
+        run: python ../tool/version.py metadata tv
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.38.10'
+          channel: stable
+          cache: true
+      - name: Set up Rust native targets
+        uses: ./.github/actions/setup-native
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+      - name: Restore packages
+        run: flutter pub get --enforce-lockfile
+      - uses: ./.github/actions/check-native
+
+      - name: Test TV danmaku batching and follow polling
+        run: flutter test --no-pub test/danmaku_batch_test.dart test/follow_refresh_test.dart
+
+      - name: Validate public signing baseline
+        run: python ../tool/verify_apk_signer.py tv
+
+      - name: Configure APK signing
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.TV_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.TV_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.TV_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.TV_KEY_ALIAS }}
+        run: |
+          python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          names = ('KEYSTORE_BASE64', 'STORE_PASSWORD', 'KEY_PASSWORD', 'KEY_ALIAS')
+          present = [bool(os.environ.get(name)) for name in names]
+          if any(present) and not all(present):
+              raise SystemExit('Release signing secrets are incomplete; refusing to fall back silently.')
+
+          if all(present):
+              os.umask(0o077)
+              keystore = Path(os.environ['RUNNER_TEMP']) / 'simple-live-tv-release.jks'
+              try:
+                  keystore.write_bytes(base64.b64decode(
+                      ''.join(os.environ['KEYSTORE_BASE64'].split()), validate=True))
+              except ValueError:
+                  raise SystemExit('KEYSTORE_BASE64 is not valid base64.') from None
+
+              # Java Properties accepts Unicode escapes. Encode every UTF-16 unit
+              # so spaces, backslashes and punctuation in secrets remain literal.
+              def escape(value):
+                  raw = value.encode('utf-16-be')
+                  return ''.join('\\u%04x' % int.from_bytes(raw[i:i+2], 'big')
+                                 for i in range(0, len(raw), 2))
+
+              properties = {
+                  'storeFile': str(keystore),
+                  'storePassword': os.environ['STORE_PASSWORD'],
+                  'keyPassword': os.environ['KEY_PASSWORD'],
+                  'keyAlias': os.environ['KEY_ALIAS'],
+              }
+              Path('android/key.properties').write_text(''.join(
+                  key + '=' + escape(value) + '\n' for key, value in properties.items()))
+              mode = 'release-signed'
+          else:
+              raise SystemExit(
+                  'Stable release signing is required. Configure the persistent signing key '
+                  'for the chosen update baseline; CI will not generate a replacement '
+                  'or publish an ephemeral TestSigned APK. A new key cannot update an old app.')
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('mode=' + mode + '\n')
+              output.write('label=ReleaseSigned' + '\n')
+          PY
+
+      - name: Build release APKs
+        run: flutter build apk --release --split-per-abi --no-pub
+      - name: Verify every native library, ABI and APK ZIP alignment
+        run: |
+          set -euo pipefail
+          python ../tool/verify_native_bundle.py android build/app/outputs/flutter-apk
+          sdk_root="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          zipalign="$(find "$sdk_root/build-tools" -name zipalign -type f | sort -V | tail -n 1)"
+          test -x "$zipalign"
+          for apk in build/app/outputs/flutter-apk/app-*-release.apk; do
+            "$zipalign" -c -P 16 4 "$apk"
+          done
+
+      - name: Verify APK signatures and prepare artifacts
+        env:
+          SIGNING_MODE: ${{ steps.signing.outputs.mode }}
+          SIGNING_LABEL: ${{ steps.signing.outputs.label }}
+          APP_VERSION: ${{ steps.metadata.outputs.artifact_version }}
+          PACKAGE_VERSION: ${{ steps.metadata.outputs.package_version }}
+          VERSION_NAME: ${{ steps.metadata.outputs.version }}
+          BUILD_NUMBER: ${{ steps.metadata.outputs.build_number }}
+        run: |
+          set -euo pipefail
+          sdk_root="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          apksigner="$(find "$sdk_root/build-tools" -name apksigner -type f | sort -V | tail -n 1)"
+          test -n "$apksigner"
+          aapt2="$(dirname "$apksigner")/aapt2"
+          test -x "$aapt2"
+          mkdir -p build/apk-artifacts
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            apk="build/app/outputs/flutter-apk/app-${abi}-release.apk"
+            test -s "$apk"
+            "$apksigner" verify --print-certs "$apk" > "build/apk-artifacts/${abi}-SIGNING-CERT.txt"
+            python ../tool/verify_apk_signer.py tv "build/apk-artifacts/${abi}-SIGNING-CERT.txt"
+            case "$abi" in
+              arm64-v8a) arch=arm64; offset=2000 ;;
+              armeabi-v7a) arch=arm32; offset=1000 ;;
+              x86_64) arch=x64; offset=4000 ;;
+            esac
+            badging="$("$aapt2" dump badging "$apk")"
+            actual_package="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<< "$badging")"
+            actual_name="$(sed -n "s/^package:.* versionName='\([^']*\)'.*/\1/p" <<< "$badging")"
+            actual_code="$(sed -n "s/^package:.* versionCode='\([^']*\)'.*/\1/p" <<< "$badging")"
+            expected_code=$((BUILD_NUMBER + offset))
+            if [[ "$actual_package" != "com.xycz.simple_live_tv" || "$actual_name" != "$VERSION_NAME" || "$actual_code" != "$expected_code" ]]; then
+              echo "::error::$abi APK version $actual_name+$actual_code does not match source $PACKAGE_VERSION (expected ABI code $expected_code)"
+              exit 1
+            fi
+            printf 'Source: %s\nAPK: %s+%s\n' "$PACKAGE_VERSION" "$actual_name" "$actual_code" > "build/apk-artifacts/${abi}-VERSION.txt"
+            cp "$apk" "build/apk-artifacts/Simple-Live-${APP_VERSION}-Android-TV-${arch}-${SIGNING_LABEL}.apk"
+          done
+          cp pubspec.lock build/apk-artifacts/pubspec.lock
+          flutter --version > build/apk-artifacts/FLUTTER-VERSION.txt
+          cd build/apk-artifacts
+          sha256sum *.apk > SHA256SUMS.txt
+          printf '%s\n' \
+            "Source version: $PACKAGE_VERSION" \
+            "Artifact version: $APP_VERSION" \
+            "Commit: $GITHUB_SHA" \
+            "Signing: $SIGNING_MODE" \
+            'Build mode: release' \
+            'Package: com.xycz.simple_live_tv' \
+            'Android TV: choose arm64, arm32 or x64 to match the device CPU and OS.' \
+            'In-place updates require the same application ID, signing identity and ABI, with a higher version code.' \
+            'Keep the existing app and data until you explicitly choose a migration; no uninstall is automatic.' \
+            'TV: verify an available backup or migration route before replacing the installed app.' \
+            'Do not assume the main-app export UI exists on TV; uninstall deletes local data.' \
+            'The configured key must match the installed app; CI cannot recover a lost historical private key.' \
+            > BUILD-INFO.txt
+          cat FLUTTER-VERSION.txt >> BUILD-INFO.txt
+          printf '%s\n' "Android TV $APP_VERSION · arm32 / arm64 / x64 · $SIGNING_LABEL" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload arm64 APK
+        id: upload_arm64
+        uses: actions/upload-artifact@v7
+        with:
+          path: simple_live_tv_app/build/apk-artifacts/Simple-Live-${{ steps.metadata.outputs.artifact_version }}-Android-TV-arm64-${{ steps.signing.outputs.label }}.apk
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload arm32 APK
+        id: upload_arm32
+        uses: actions/upload-artifact@v7
+        with:
+          path: simple_live_tv_app/build/apk-artifacts/Simple-Live-${{ steps.metadata.outputs.artifact_version }}-Android-TV-arm32-${{ steps.signing.outputs.label }}.apk
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload x64 APK
+        id: upload_x64
+        uses: actions/upload-artifact@v7
+        with:
+          path: simple_live_tv_app/build/apk-artifacts/Simple-Live-${{ steps.metadata.outputs.artifact_version }}-Android-TV-x64-${{ steps.signing.outputs.label }}.apk
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Summarize APK downloads
+        env:
+          ARM64_URL: ${{ steps.upload_arm64.outputs.artifact-url }}
+          ARM32_URL: ${{ steps.upload_arm32.outputs.artifact-url }}
+          X64_URL: ${{ steps.upload_x64.outputs.artifact-url }}
+        run: |
+          {
+            printf '[Download arm64 APK](%s) · [Download arm32 APK](%s) · [Download x64 APK](%s)\n\n' "$ARM64_URL" "$ARM32_URL" "$X64_URL"
+            printf '%s\n' 'Sign in to GitHub and download the APK matching your device; no outer ZIP extraction is needed.' ''
+            cat build/apk-artifacts/BUILD-INFO.txt
+            printf '\nSHA-256 checksums:\n'
+            cat build/apk-artifacts/SHA256SUMS.txt
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove temporary release signing files
+        if: always()
+        run: |
+          rm -f android/key.properties "$RUNNER_TEMP/simple-live-tv-release.jks"
+
+  ios:
+    runs-on: macos-15
+    env:
+      # connectivity_plus uses APIs introduced in the Apple 26 SDKs.
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: simple_live_app
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Check version and prepare build identity
+        id: metadata
+        run: python ../tool/version.py metadata main
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.38.10'
+          channel: stable
+          cache: true
+      - name: Set up Rust native targets
+        uses: ./.github/actions/setup-native
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+      - name: Restore locked packages
+        run: flutter pub get --enforce-lockfile
+      - uses: ./.github/actions/check-native
+      - name: Test native assets on iOS simulator
+        run: python ../tool/test_ios_native.py
+      - name: Build unsigned iOS app
+        run: flutter build ios --release --no-codesign --no-pub
+      - name: Verify device native libraries
+        run: python ../tool/verify_native_bundle.py ios build/ios/iphoneos/Runner.app
+      - name: Verify Apple package version and identity
+        env:
+          PACKAGE_VERSION: ${{ steps.metadata.outputs.package_version }}
+        run: python ../tool/verify_installer_identity.py ios "build/ios/iphoneos/Runner.app" "$PACKAGE_VERSION"
+      - name: Package unsigned IPA
+        env:
+          APP_VERSION: ${{ steps.metadata.outputs.artifact_version }}
+        run: |
+          set -euo pipefail
+          test -d build/ios/iphoneos/Runner.app
+          mkdir -p build/ipa/Payload build/artifacts
+          ditto build/ios/iphoneos/Runner.app build/ipa/Payload/Runner.app
+          (cd build/ipa && zip -qry "../artifacts/Simple-Live-${APP_VERSION}-iOS-arm64-Unsigned.ipa" Payload)
+          unzip -t build/artifacts/*.ipa
+          (cd build/artifacts && shasum -a 256 *.ipa > SHA256SUMS.txt)
+          printf '%s\n' "iOS $APP_VERSION · arm64 · unsigned IPA" 'Requires signing with an Apple development/distribution identity before installation.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload iOS package
+        uses: actions/upload-artifact@v7
+        with:
+          name: Simple-Live-${{ steps.metadata.outputs.artifact_version }}-iOS-arm64-Unsigned
+          path: simple_live_app/build/artifacts/*.ipa
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+  macos:
+    runs-on: macos-15
+    env:
+      # connectivity_plus uses APIs introduced in the Apple 26 SDKs.
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: simple_live_app
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Check version and prepare build identity
+        id: metadata
+        run: python ../tool/version.py metadata main
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.38.10'
+          channel: stable
+          cache: true
+      - name: Set up Rust native targets
+        uses: ./.github/actions/setup-native
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+      - name: Build console with native asset bundle
+        working-directory: simple_live_console
+        run: |
+          dart pub get --enforce-lockfile
+          dart build cli --target bin/simple_live_console.dart --output build/cli
+          python ../tool/verify_native_bundle.py cli build/cli
+      - name: Restore locked packages
+        run: flutter pub get --enforce-lockfile
+      - uses: ./.github/actions/check-native
+      - name: Configure macOS release
+        run: flutter build macos --release --no-pub --config-only
+      - name: Build unsigned universal macOS app
+        run: |
+          xcodebuild -workspace macos/Runner.xcworkspace -scheme Runner \
+            -configuration Release -derivedDataPath "$PWD/build/macos" \
+            -destination 'generic/platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= \
+            ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO -quiet
+      - name: Verify both native library architectures
+        run: python ../tool/verify_native_bundle.py macos "build/macos/Build/Products/Release/Simple Live.app"
+      - name: Verify Apple package version and identity
+        env:
+          PACKAGE_VERSION: ${{ steps.metadata.outputs.package_version }}
+        run: python ../tool/verify_installer_identity.py macos "build/macos/Build/Products/Release/Simple Live.app" "$PACKAGE_VERSION"
+      - name: Package macOS app
+        env:
+          APP_VERSION: ${{ steps.metadata.outputs.artifact_version }}
+        run: |
+          set -euo pipefail
+          app='build/macos/Build/Products/Release/Simple Live.app'
+          test -d "$app"
+          lipo "$app/Contents/MacOS/Simple Live" -verify_arch arm64 x86_64
+          mkdir -p build/artifacts
+          mkdir -p build/dmg-root
+          ditto "$app" 'build/dmg-root/Simple Live.app'
+          ln -s /Applications build/dmg-root/Applications
+          dmg="build/artifacts/Simple-Live-${APP_VERSION}-macOS-universal-Unsigned.dmg"
+          hdiutil create -volname 'Simple Live' -srcfolder build/dmg-root -ov -format UDZO "$dmg"
+          hdiutil verify "$dmg"
+          mountpoint="$RUNNER_TEMP/simple-live-dmg"
+          mkdir -p "$mountpoint"
+          hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mountpoint"
+          trap 'hdiutil detach "$mountpoint"' EXIT
+          python ../tool/verify_native_bundle.py macos "$mountpoint/Simple Live.app"
+          test "$(readlink "$mountpoint/Applications")" = /Applications
+          lipo "$mountpoint/Simple Live.app/Contents/MacOS/Simple Live" -verify_arch arm64 x86_64
+          hdiutil detach "$mountpoint"
+          trap - EXIT
+          (cd build/artifacts && shasum -a 256 *.dmg > SHA256SUMS.txt)
+          printf '%s\n' "macOS $APP_VERSION · arm64 + x64 · unsigned DMG" 'Open the DMG and drag Simple Live to Applications. Not notarized; macOS may prevent opening this build.' >> "$GITHUB_STEP_SUMMARY"
+          cat build/artifacts/SHA256SUMS.txt >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload macOS package
+        uses: actions/upload-artifact@v7
+        with:
+          name: Simple-Live-${{ steps.metadata.outputs.artifact_version }}-macOS-universal-Unsigned
+          path: simple_live_app/build/artifacts/*.dmg
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: simple_live_app
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Check version and prepare build identity
+        id: metadata
+        run: python ../tool/version.py metadata main
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.38.10'
+          channel: stable
+          cache: true
+      - name: Set up Rust native targets
+        uses: ./.github/actions/setup-native
+      - name: Build console with native asset bundle
+        working-directory: simple_live_console
+        run: |
+          dart pub get --enforce-lockfile
+          dart build cli --target bin/simple_live_console.dart --output build/cli
+          python ../tool/verify_native_bundle.py cli build/cli
+      - name: Restore locked packages
+        run: flutter pub get --enforce-lockfile
+      - uses: ./.github/actions/check-native
+      - name: Build Windows release
+        run: flutter build windows --release --no-pub
+      - name: Load bundled native ABI
+        run: python ../tool/verify_native_bundle.py windows build/windows/x64/runner/Release
+      - name: Package and verify Windows installer
+        shell: pwsh
+        env:
+          APP_VERSION: ${{ steps.metadata.outputs.artifact_version }}
+          VERSION_NAME: ${{ steps.metadata.outputs.version }}
+          BUILD_NUMBER: ${{ steps.metadata.outputs.build_number }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundle = (Resolve-Path 'build/windows/x64/runner/Release').Path
+          if (!(Test-Path "$bundle/simple_live_app.exe")) { throw 'Windows executable is missing' }
+          $version = (Get-Item "$bundle/simple_live_app.exe").VersionInfo
+          $actualVersion = "$($version.FileMajorPart).$($version.FileMinorPart).$($version.FileBuildPart).$($version.FilePrivatePart)"
+          if ($actualVersion -ne "$env:VERSION_NAME.$env:BUILD_NUMBER") { throw "Executable version mismatch: $actualVersion" }
+          $compiler = "${env:ProgramFiles(x86)}/Inno Setup 6/ISCC.exe"
+          if (!(Test-Path $compiler)) { throw 'Preinstalled Inno Setup compiler is missing' }
+          New-Item -ItemType Directory -Force build/artifacts | Out-Null
+          $output = (Resolve-Path 'build/artifacts').Path
+          $basename = "Simple-Live-$env:APP_VERSION-Windows-x64-Setup-Unsigned"
+          $notice = Join-Path $output 'INSTALL-NOTES.txt'
+          @(
+            'Unsigned Simple Live installer. Windows may show an unknown-publisher warning.'
+            'Requires Microsoft Visual C++ 2015-2022 Redistributable (x64).'
+            'https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist'
+            'Installs for the current user. Existing application data is not removed.'
+          ) | Set-Content -Encoding utf8 $notice
+          @"
+          [Setup]
+          AppId=com.xycz.simplelive
+          AppName=Simple Live
+          AppVersion=$env:VERSION_NAME
+          DefaultDirName={localappdata}\Programs\Simple Live
+          DefaultGroupName=Simple Live
+          UsePreviousAppDir=yes
+          CloseApplications=yes
+          PrivilegesRequired=lowest
+          ArchitecturesAllowed=x64compatible
+          ArchitecturesInstallIn64BitMode=x64compatible
+          OutputDir=$output
+          OutputBaseFilename=$basename
+          Compression=lzma2
+          SolidCompression=yes
+          WizardStyle=modern
+          UninstallDisplayIcon={app}\simple_live_app.exe
+          InfoBeforeFile=$notice
+          [Files]
+          Source: "$bundle\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+          [Icons]
+          Name: "{group}\Simple Live"; Filename: "{app}\simple_live_app.exe"; WorkingDir: "{app}"
+          "@ | Set-Content -Encoding utf8 build/installer.iss
+          & $compiler build/installer.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compilation failed' }
+          $installer = Join-Path $output "$basename.exe"
+          if (!(Test-Path $installer)) { throw 'Installer is missing' }
+          $installed = Join-Path $env:RUNNER_TEMP 'simple-live-installer-check'
+          $process = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=`"$installed`"") -PassThru -Wait
+          if ($process.ExitCode -ne 0) { throw "Installer exited $($process.ExitCode)" }
+          # A second install must discover the existing location without /DIR,
+          # restore replaced application files and preserve unrelated user data.
+          $sentinel = Join-Path $installed 'upgrade-data-sentinel.txt'
+          'preserve-existing-data' | Set-Content -Encoding utf8 $sentinel
+          Remove-Item (Join-Path $installed 'simple_live_app.exe')
+          $upgrade = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-') -PassThru -Wait
+          if ($upgrade.ExitCode -ne 0) { throw "Upgrade install exited $($upgrade.ExitCode)" }
+          if ((Get-Content -Raw $sentinel).Trim() -ne 'preserve-existing-data') { throw 'Upgrade removed existing data' }
+          Get-ChildItem $bundle -Recurse -File | ForEach-Object {
+            $relative = [IO.Path]::GetRelativePath($bundle, $_.FullName)
+            $copy = Join-Path $installed $relative
+            if (!(Test-Path $copy) -or (Get-FileHash $_.FullName).Hash -ne (Get-FileHash $copy).Hash) {
+              throw "Installed bundle differs: $relative"
+            }
+          }
+          python ../tool/verify_native_bundle.py windows "$installed"
+          if ($LASTEXITCODE -ne 0) { throw 'Installed native bundle verification failed' }
+          $hash = Get-FileHash $installer -Algorithm SHA256
+          "Windows $env:APP_VERSION · x64 · unsigned installer EXE. Requires Microsoft Visual C++ x64 runtime." >> $env:GITHUB_STEP_SUMMARY
+          "$($hash.Hash.ToLower())  $basename.exe" >> $env:GITHUB_STEP_SUMMARY
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v7
+        with:
+          name: Simple-Live-${{ steps.metadata.outputs.artifact_version }}-Windows-x64-Unsigned
+          path: simple_live_app/build/artifacts/*.exe
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+  linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: simple_live_app
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Check version and prepare build identity
+        id: metadata
+        run: python ../tool/version.py metadata main
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.38.10'
+          channel: stable
+          cache: true
+      - name: Set up Rust native targets
+        uses: ./.github/actions/setup-native
+      - name: Build console with native asset bundle
+        working-directory: simple_live_console
+        run: |
+          dart pub get --enforce-lockfile
+          dart build cli --target bin/simple_live_console.dart --output build/cli
+          python ../tool/verify_native_bundle.py cli build/cli
+      - name: Restore locked packages
+        run: flutter pub get --enforce-lockfile
+      - uses: ./.github/actions/check-native
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libasound2-dev libmpv-dev mpv
+      - name: Build Linux release
+        run: flutter build linux --release --no-pub
+      - name: Load bundled native ABI
+        run: python ../tool/verify_native_bundle.py linux build/linux/x64/release/bundle
+      - name: Package and verify Linux DEB
+        env:
+          APP_VERSION: ${{ steps.metadata.outputs.artifact_version }}
+          PACKAGE_VERSION: ${{ steps.metadata.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          bundle=build/linux/x64/release/bundle
+          test -x "$bundle/simple_live_app"
+          root=build/deb-root
+          mkdir -p "$root/DEBIAN" "$root/opt/simple-live" "$root/usr/bin" \
+            "$root/usr/share/applications" "$root/usr/share/icons/hicolor/256x256/apps" build/artifacts
+          cp -a "$bundle/." "$root/opt/simple-live/"
+          install -m 644 macos/Runner/Assets.xcassets/AppIcon.appiconset/icon-256.png "$root/usr/share/icons/hicolor/256x256/apps/com.xycz.simple_live_app.png"
+          cat > "$root/usr/bin/simple-live" <<'EOF'
+          #!/bin/sh
+          exec /opt/simple-live/simple_live_app "$@"
+          EOF
+          chmod 755 "$root/usr/bin/simple-live"
+          cat > "$root/usr/share/applications/com.xycz.simple_live_app.desktop" <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=Simple Live
+          Comment=Live stream player
+          Exec=simple-live
+          Icon=com.xycz.simple_live_app
+          Terminal=false
+          Categories=AudioVideo;Player;
+          StartupNotify=true
+          EOF
+          installed_size="$(du -sk "$root/opt" "$root/usr" | awk '{sum += $1} END {print sum}')"
+          cat > "$root/DEBIAN/control" <<EOF
+          Package: simple-live
+          Version: $PACKAGE_VERSION
+          Section: video
+          Priority: optional
+          Architecture: amd64
+          Maintainer: xiaoyaocz <xiaoyaocz@52uwp.com>
+          Installed-Size: $installed_size
+          Depends: libc6 (>= 2.35), libstdc++6, libgtk-3-0, libmpv1, libasound2
+          Description: Simple Live desktop live stream player
+           Includes the complete Flutter application and bundled native libraries.
+          EOF
+          find "$root" -type d -exec chmod 755 {} +
+          deb="build/artifacts/Simple-Live-${APP_VERSION}-Linux-x64.deb"
+          dpkg-deb --build --root-owner-group "$root" "$deb"
+          dpkg-deb --info "$deb"
+          test "$(dpkg-deb -f "$deb" Package)" = simple-live
+          test "$(dpkg-deb -f "$deb" Version)" = "$PACKAGE_VERSION"
+          test "$(dpkg-deb -f "$deb" Architecture)" = amd64
+          extracted=build/deb-verified
+          dpkg-deb --extract "$deb" "$extracted"
+          diff -r "$bundle" "$extracted/opt/simple-live"
+          test -x "$extracted/usr/bin/simple-live"
+          test -f "$extracted/usr/share/applications/com.xycz.simple_live_app.desktop"
+          python ../tool/verify_native_bundle.py linux "$extracted/opt/simple-live"
+          while IFS= read -r -d '' binary; do
+            if file -b "$binary" | grep -q '^ELF'; then
+              dependencies="$(LD_LIBRARY_PATH="$PWD/$extracted/opt/simple-live/lib" ldd "$binary")"
+              printf '%s\n%s\n' "$binary" "$dependencies"
+              if grep -q 'not found' <<< "$dependencies"; then
+                echo "::error::Unresolved Linux runtime dependency in $binary"
+                exit 1
+              fi
+            fi
+          done < <(find "$extracted/opt/simple-live" -type f -print0)
+          (cd build/artifacts && sha256sum *.deb > SHA256SUMS.txt)
+          printf '%s\n' "Linux $APP_VERSION · amd64 · DEB" 'For Ubuntu 22.04 or compatible distributions with libmpv1. Install using sudo apt install ./Simple-Live-*.deb so dependencies are resolved.' >> "$GITHUB_STEP_SUMMARY"
+          cat build/artifacts/SHA256SUMS.txt >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload Linux package
+        uses: actions/upload-artifact@v7
+        with:
+          name: Simple-Live-${{ steps.metadata.outputs.artifact_version }}-Linux-x64-Release
+          path: simple_live_app/build/artifacts/*.deb
+          archive: false
+          if-no-files-found: error
+          retention-days: 14

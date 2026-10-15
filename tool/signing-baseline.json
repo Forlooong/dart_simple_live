@@ -1,0 +1,10 @@
+{
+  "main": {
+    "package_id": "com.xycz.simple_live",
+    "certificate_sha256": ""
+  },
+  "tv": {
+    "package_id": "com.xycz.simple_live_tv",
+    "certificate_sha256": ""
+  }
+}

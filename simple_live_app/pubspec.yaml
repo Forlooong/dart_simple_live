@@ -1,5 +1,5 @@
 name: simple_live_app
-version: 1.12.10+11111
+version: 1.12.11+11112
 publish_to: none
 description: "Simple Live APP"
 environment:
@@ -118,3 +118,4 @@ flutter:
     - assets/images/
     - assets/icons/
     - assets/lotties/
+

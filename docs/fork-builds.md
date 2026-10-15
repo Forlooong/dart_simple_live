@@ -1,39 +1,101 @@
-# Fork build artifacts
+# Unified installer builds and version management
 
-The `app-build-action-*` workflows build this fork on `master` pushes or manual runs. The main app's Android, iOS, macOS, Windows and Linux packages all read `simple_live_app/pubspec.yaml`. TV reads `simple_live_tv_app/pubspec.yaml` independently. These committed pubspecs are the source of truth for installed versions; CI does not override them with a run counter.
+One workflow, `app-build-action-all-platforms` (`fork_all_platforms.yml`), runs on
+`master` pushes or manually. Its six independent jobs build Android, Android TV,
+iOS, macOS, Windows and Linux. A failed platform does not prevent the other jobs
+from completing. No tags or GitHub Releases are created.
 
-## Before committing a fix
+## Version source of truth
 
-Run this once per batch of main-app fixes, from the repository root:
+The main app's five platforms share `simple_live_app/pubspec.yaml`; TV uses
+`simple_live_tv_app/pubspec.yaml`. Installed versions come from these committed
+files, never GitHub run counters. Replacing a workflow or rerunning a build cannot
+reset the installed version. Artifact filenames additionally include run number,
+attempt and short commit SHA so separate attempts remain identifiable.
 
-```shell
-python tool/version.py bump main
+Before committing installer-affecting changes, run from the repository root:
+
+```sh
+python tool/version.py bump main  # main app only
+python tool/version.py bump tv    # TV only
+python tool/version.py bump both  # core, shared renderer or shared build changes
+python tool/version.py check both
 ```
 
-This increments both the patch version and build number (for example, `1.12.3+11104` → `1.12.4+11105`) and updates all five main-app workflow titles together. Include those files in the same commit as the fix. Use `bump tv` for TV changes, or `bump both` for changes in `simple_live_core` that affect both apps. For an intentional major/minor release, edit the pubspec version and increase its build number, then run `python tool/version.py sync main` (or `tv`) to refresh the titles without another increment.
+A bump increases both the semantic patch version and build number, and updates the
+single workflow title with both versions. Include the bump in the final
+installer-affecting commit of the change. For intentional major/minor releases,
+edit the pubspec while increasing its build number, then run `sync main` or
+`sync tv`. Commands edit local files; they never commit or push.
 
-Check the versions locally with `python tool/version.py check both`. On a push, CI also compares app/core changes against the previous branch tip and refuses to build if either the version name or build number has not increased. A push containing multiple commits needs one version increment for that batch. Documentation/build-tool-only changes and rebuilding the same commit may reuse the committed version.
+The guard covers application files, shared core/packages, build scripts, Actions
+and workflow packaging. Title-only workflow changes do not force a TV bump for a
+main-only change. Documentation-only edits and rebuilds reuse the source version.
+Both push and manual builds check history: a failed unversioned change cannot be
+bypassed just by manually rebuilding or adding a documentation commit. If source
+changes follow a version-only commit, put a fresh bump in the final source commit.
+All jobs fetch full history for this check. Version bounds are checked before
+building, including Android's maximum versionCode and Windows uint16 components.
 
-The command updates files locally; it does not commit or push. CI validates versions and never creates version-bump commits. Remember to run the command before committing new application changes.
+## Installer and update contracts
 
-## Identifying builds
+- Android and TV: separate arm32, arm64 and x64 APK downloads. Application IDs stay
+  `com.xycz.simple_live` and `com.xycz.simple_live_tv`. Flutter split APKs add ABI
+  offsets to the committed build number: arm32 +1000, arm64 +2000 and x64 +4000.
+  CI checks actual manifest IDs and version values. Updates must use the same ABI,
+  package ID and signing identity with an increased versionCode. Switching ABI is
+  not guaranteed to be an upgrade, because offsets differ.
+- iOS: unsigned arm64 IPA, with unchanged bundle ID `com.xycz.simple-live` and
+  checked source version/build metadata. It requires appropriate Apple signing
+  and provisioning before installation. Consistent signing/entitlements and
+  signed-distribution version compliance remain separate prerequisites. Existing
+  build-number representation is preserved rather than reset or remapped lower.
+- macOS: unsigned/unnotarized universal DMG. The bundle ID remains
+  `com.xycz.simpleLiveApp`; CI checks bundle version/build and both architectures.
+  Replace the application in Applications without deleting its user data. macOS
+  may block an unsigned application; no notarization claim is made.
+- Windows: unsigned x64 installer EXE. Inno AppId remains `com.xycz.simplelive` and
+  the default per-user path is `%LOCALAPPDATA%\Programs\Simple Live`. Existing
+  install locations are reused. CI verifies executable numeric version and a
+  repeated install without `/DIR`, file restoration and a data sentinel. This
+  checks packaging behavior, not migration from every historic user installation.
+  Microsoft Visual C++ 2015–2022 x64 runtime is required.
+- Linux: amd64 DEB, package name `simple-live`, app path `/opt/simple-live`. CI
+  verifies package version/architecture and runtime libraries. Install with
+  `sudo apt install ./Simple-Live-*.deb` on Ubuntu 22.04 or a compatible system
+  providing libmpv1. Package upgrades retain the stable package identity.
 
-- Actions titles include the complete source version and workflow run number: `Release Android · 1.12.4+11105 · #25`.
-- Artifact and package names include the source version, run number, attempt and short commit SHA: `Simple-Live-1.12.4+11105-r25.1-abcdef0-Android-arm64-TestSigned.apk`.
-- A rerun uses the same installed version but a different attempt suffix. The workflow summary includes the commit and build identity; Android/TV also include these in `BUILD-INFO.txt`.
-- GitHub evaluates `run-name` before checkout, so the version in the title must be committed. The shared script updates and validates these titles against pubspec; the run number is supplied by GitHub.
-- Flutter 3.38.10 split APKs add ABI offsets to the committed build number: arm32 `+1000`, arm64 `+2000`, x64 `+4000`. For source `1.12.4+11105`, arm64 reports `1.12.4+13105`. Android/TV workflows inspect the finished APK manifests and fail if these versions do not match, and package an ABI-specific `VERSION.txt` with the actual values.
+## Stable signing from the new baseline onward
 
-## Downloads
+Android/TV need a persistent signing key before the first new-baseline installer
+can be produced. Keep that same key and alias for every later version, and keep a
+secure offline backup. CI pins every APK certificate to the public fingerprint in
+`tool/signing-baseline.json`. Empty fingerprints or missing signing settings fail; it
+never generates a new key or falls back to ephemeral runner debug signing.
 
-- Android: one artifact containing arm32, arm64 and x64 release APKs, plus a smaller arm64-only artifact linked in the build summary.
-- Android TV: one artifact containing all three APK architectures.
-- Android/TV missing signing secrets opt into test signing explicitly; incomplete secrets fail. In-place updates require the same signing key. Test keys may change between runs. Keep the old app until a migration is explicitly chosen; main-app follows and settings require separate exports, verified outside the app before any uninstall. Do not assume TV offers the same export UI. Nothing uninstalls automatically.
-- iOS: unsigned arm64 IPA, minimum iOS 14 (required by workmanager_apple). Requires appropriate Apple signing before installation.
-- macOS: unsigned, unnotarized universal (Apple Silicon + Intel) application ZIP. macOS may block it.
-- Windows: unsigned x64 portable ZIP. Extract all files together; requires the Microsoft Visual C++ 2015–2022 x64 runtime.
-- Linux: x64 tar.gz bundle, built on Ubuntu 22.04. Extract all files together; requires GTK 3 and libmpv runtime libraries on a compatible distribution.
+Main uses `KEYSTORE_BASE64`, `STORE_PASSWORD`, `KEY_PASSWORD`, `KEY_ALIAS`; TV uses
+the matching `TV_` names. Configure credentials only through an explicitly
+authorized secure setup. Do not paste keys or passwords into chat, commit them,
+or include them in artifacts. This change does not generate keys or modify secrets. See the user-operated
+[secure baseline setup guide](signing-baseline-setup.md).
 
-Artifacts include SHA-256 checksums and are retained for 14 days. Download from the workflow summary or Artifacts section. These workflows do not create tags or GitHub Releases. The original tag-triggered release/development workflows remain separate.
+The user has chosen a new update baseline; compatibility with historical
+TestSigned installers is outside this baseline. Installing the baseline over an
+old app with a different key will still fail. A new key cannot recover that old
+update path. Do not automatically uninstall or clear old data. After choosing and
+installing the new baseline, subsequent builds must retain its signing identity.
+`ReleaseSigned` means configured signing was used, not that every historical
+certificate was matched. Verify an actual baseline-to-next-version device update
+before claiming end-to-end upgrade success.
 
-See [release gates](release-gates.md) before publishing or claiming stable/upgrade compatibility. The TV tag workflow now validates its tag against pubspec and prepares a draft prerelease; it does not trust stale update-channel JSON as the release version.
+## Downloads and evidence
+
+Only the ten installer files are uploaded: six APKs, one IPA, one DMG, one EXE and
+one DEB. Each is an individual artifact with `archive: false`, retained for 14 days.
+No outer ZIPs, source bundles, checksum files or lockfiles are extra downloads.
+Checksums and build details appear in the workflow summaries. Native libraries,
+ABI/alignment checks and existing main/TV regression tests remain enabled.
+
+See [release gates](release-gates.md) for signing, runtime and real-device upgrade
+requirements. A version check and successful compile alone do not prove an
+in-place device update or preservation of all user data.

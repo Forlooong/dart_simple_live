@@ -6,8 +6,8 @@ until the applicable gates below have evidence for the **same full commit SHA**.
 
 ## Required evidence
 
-- Main app: Android, iOS, macOS, Windows and Linux fork workflows succeed on the
-  final SHA. TV: the TV fork workflow succeeds on that SHA. A previous green run
+- All six independent jobs in `app-build-action-all-platforms` succeed on the
+  final SHA. Missing Android/TV signing keys are a blocker, not a successful build. A previous green run
   does not validate later source or packaging changes. Record workflow URLs,
   attempt numbers, artifact names and SHA-256 checksums.
 - Run the Python packaging/version regressions, Rust/native/core checks, renderer
@@ -38,7 +38,8 @@ an AAB verification or substitute for runtime tests.
 
 ## Signing and data preservation
 
-`TestSigned` means optimized release code signed by an ephemeral test key. Fresh
+Historical `TestSigned` builds used optimized release code signed by an ephemeral test key.
+The unified workflow now fails closed when configured release signing is absent. Fresh
 runners can use different keys, including from the old 1.12.5 APK. A certificate
 mismatch prevents an in-place update; a version bump cannot repair that mismatch.
 Keep the old app and its data unless the user explicitly chooses a migration.
@@ -53,23 +54,21 @@ migration route before replacing an existing installation; do not assume the mai
 app's export UI exists there. Uninstalling removes local app data.
 
 Do not create a persistent key, upload credentials, modify secrets or change
-security permissions as part of this build task. A matching historical signing
-identity must be provided through an explicitly authorized secure workflow.
+security permissions as part of this build task. A persistent new-baseline signing
+identity must be configured through an explicitly authorized secure workflow.
+A historical identity is needed only if old-version compatibility is chosen.
 
 ## Publication
 
-The fork build workflows upload Actions artifacts only; they do not create tags
-or GitHub releases. Artifacts are retained for 14 days. TestSigned artifacts may be
-shared as clearly labelled test/prerelease builds with the above caveats; never
-advertise them as seamless upgrades or as having passed unperformed device tests.
+The unified workflow uploads only APK, IPA, DMG, EXE and DEB files as individual
+Actions artifacts, retained for 14 days. It does not create tags or GitHub Releases.
+Checksums/build details stay in the workflow summary, not extra downloaded files.
+Never advertise historical TestSigned builds as seamless upgrades. A green build
+does not establish a matching old signing key or replace actual device upgrade tests.
 
-The legacy TV tag workflow derives its name from `simple_live_tv_app/pubspec.yaml`
-and rejects tags other than `tv_<pubspec version name>` before signing/building.
-It creates a **draft prerelease**, never a public stable release. The legacy
-`assets/tv_app_version.json` is not build/release identity and is not silently
-updated here. Do not push a release tag merely to test CI. Main-app legacy `v*`
-tag workflows remain publication workflows: use the fork workflows for validation
-and do not trigger tag publication until the release target and evidence are
-reviewed. Before promoting any draft, explicitly review artifacts, signing,
-runtime evidence and release notes. Missing gates stay visible as blockers or
-prerelease caveats, not claimed successes.
+The iOS IPA remains unsigned and cannot be installed directly. Compatible Apple
+signing/provisioning and signed distribution compliance must be verified separately.
+Its existing build-number representation is preserved, not remapped to a lower
+value. Windows CI checks repeated installation, previous-directory reuse and a
+data sentinel; that is a packaging regression check, not an old-version/user-data
+migration certification. Missing gates remain visible as blockers.

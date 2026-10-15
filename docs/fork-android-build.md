@@ -1,59 +1,51 @@
 # Fork Android APK build
 
-The `app-build-action-android` workflow builds the checked-out commit on pushes to
-`master`, or when started with `workflow_dispatch`. Its run title uses the app version
-(for example, `Release Android · 1.12.3`). It uploads
-GitHub Actions artifacts only. It does not create tags or publish a GitHub Release.
+The `app-build-action-all-platforms` workflow builds Android, Android TV, iOS,
+macOS, Windows and Linux as independent jobs on `master` pushes and manual runs.
+It uploads installer files only and does not create tags or GitHub Releases.
+See [version management](fork-builds.md) before committing installer changes.
 
 ## Download and install
 
-1. Open the successful workflow run in the fork's **Actions** tab.
-2. Download `Simple-Live-<version>-Android-Release-<signing-label>` and unzip it.
-3. For Samsung Galaxy S20+, install the `arm64-v8a` APK. `armeabi-v7a` and `x86_64`
-   builds are also included. Checksums, commit/signing details, Flutter version,
-   and the resolved dependency lockfile are in the ZIP.
+1. Open the workflow run in the fork's Actions tab and choose the Android job.
+2. Download the individual `Simple-Live-<version>-Android-<arch>-ReleaseSigned.apk`.
+   No outer ZIP extraction is needed. Checksums are in the workflow summary.
+3. For Samsung Galaxy S20+, choose arm64. Other devices may require arm32 or x64.
+   For an update, keep the same ABI as the installed build.
 
-All APKs use Flutter's optimized **release** build mode. Their filenames identify
-whether they use a configured release certificate or a test-only debug certificate.
-The application ID remains `com.xycz.simple_live`.
+All APKs use Flutter's optimized release build mode. The main application ID
+remains `com.xycz.simple_live`; TV remains `com.xycz.simple_live_tv`.
 
 ## Signing behavior
 
-When all existing release secrets (`KEYSTORE_BASE64`, `STORE_PASSWORD`,
-`KEY_PASSWORD`, and `KEY_ALIAS`) are configured, the workflow uses those credentials
-and the original release signing configuration. If only some are present, the
-build fails rather than silently switching certificates. No private key or
-password is included in artifacts.
+All four main-app secrets (`KEYSTORE_BASE64`, `STORE_PASSWORD`,
+`KEY_PASSWORD`, `KEY_ALIAS`) are required. TV uses the corresponding `TV_` names.
+A public certificate fingerprint in `tool/signing-baseline.json` is also required.
+Every ABI must match it. Missing fingerprints, absent/incomplete signing settings
+or an unexpected certificate fail the affected Android job. See
+[baseline setup](signing-baseline-setup.md). CI
+never generates a replacement key and no longer falls back to runner debug keys.
+Other platform jobs run independently. Private keys/passwords are never artifacts.
 
-When none are configured, this dedicated workflow explicitly sets the Gradle
-property `allowDebugReleaseSigning=true`. This allows an installable, debug-signed
-release APK for fork testing. Other release builds still require signing settings
-unless they explicitly opt in. A supplied `android/key.properties` always takes
-precedence and must be complete.
+The chosen new baseline needs a persistent signing key, reused for every future
+update. Compatibility with older TestSigned builds is not part of this baseline.
+For later updates, the key must match the installed baseline app. A
+`ReleaseSigned` filename only means configured signing was used; compare its
+certificate with the old installed APK before claiming an in-place update.
+Previously published `TestSigned` builds used ephemeral runner keys. If that
+private key was lost, a newly generated key cannot update them, regardless of
+version number. This workflow cannot recover a historical private key.
 
-A debug-signed build cannot update an installed app signed with a different key.
-The CI debug key may change on each fresh runner, so it is not suitable for a
-stable update channel. In particular, a certificate different from the old 1.12.5
-APK cannot update that installation. Keep the existing app until you explicitly
-choose a migration. Export follows from the follow page and settings from
-Settings → Other → Export configuration separately: settings export does not
-include the follows database. Verify both files outside the app before any
-user-chosen uninstall, which removes local data. These exports are not a promise
-to preserve all account/session/history data. A matching, persistent
-release keystore is required for normal in-place updates. The workflow does not
-change the package ID or uninstall anything on your device.
+Keep the old app and data unless you explicitly choose a migration. Main-app
+follows and settings require separate exports, checked outside the app before
+any user-chosen uninstall. These exports do not guarantee every session/history
+item is preserved. Do not assume TV has the same export UI. Nothing in this
+workflow uninstalls the app, clears data, changes app IDs or provisions credentials.
 
-For an intentional local test-only release build without a keystore:
-
-```sh
-cd simple_live_app
-ORG_GRADLE_PROJECT_allowDebugReleaseSigning=true flutter build apk --release --split-per-abi
-```
-
-The workflow verifies APK signatures before uploading, uses Java 17 and Flutter
-3.38.10, and runs focused checks on the player lifecycle changes. These checks do
-not replace on-device testing of rotation, background/foreground, picture-in-picture,
-rapid source changes, and repeated enter/exit behavior.
+Explicit local test-only Gradle signing remains available to developers, but its
+output is not an upgrade-compatible distribution channel. CI verifies APK
+signatures, application IDs, ABI-specific version codes and native libraries
+before upload. Real-device upgrade/runtime testing is still required.
 
 ## Orientation dependency compatibility
 
@@ -94,10 +86,11 @@ This source review does not replace building the final dependency set in CI.
 The mobile app commits `simple_live_app/pubspec.lock` from the reviewed CI
 dependency snapshot. The fork workflow uses `flutter pub get --enforce-lockfile`
 so it fails instead of silently resolving newer packages or changed checksums.
-The lockfile, Flutter version and exact commit also travel with the APK artifact.
+The committed lockfile is enforced during builds; the workflow summary records the version and commit. Downloads contain only the APK.
 
 ## Final release verification
 
 See [release gates](release-gates.md) for exact-commit platform builds, whole-APK
 ELF/ABI/ZIP validation, signing compatibility and real 16 KiB device testing.
 Successful static checks alone do not establish runtime compatibility.
+
