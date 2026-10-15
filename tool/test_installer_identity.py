@@ -37,24 +37,24 @@ class InstallerIdentityTest(unittest.TestCase):
             path = Path(temp) / "baseline.json"
             digest = "ab" * 32
             baseline = {"main": {"package_id": "com.xycz.simple_live", "certificate_sha256": digest}}
-            path.write_text(json.dumps(baseline))
+            path.write_text(json.dumps(baseline), encoding="utf-8")
             report = f"Signer #1 certificate SHA-256 digest: {digest}\n"
             self.assertEqual(verify_report("main", report, path), digest)
             for bad in (report.replace(digest, "cd" * 32), "", report + report.replace("#1", "#2")):
                 with self.assertRaisesRegex(ValueError, "does not match"):
                     verify_report("main", bad, path)
             baseline["main"]["certificate_sha256"] = ""
-            path.write_text(json.dumps(baseline))
+            path.write_text(json.dumps(baseline), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "not configured"):
                 expected_signer("main", path)
             baseline["main"]["certificate_sha256"] = digest
             baseline["main"]["package_id"] = "changed.package"
-            path.write_text(json.dumps(baseline))
+            path.write_text(json.dumps(baseline), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "package ID"):
                 expected_signer("main", path)
 
     def test_unified_workflow_keeps_independent_platforms_and_installers(self):
-        workflow = (ROOT / ".github/workflows/fork_all_platforms.yml").read_text()
+        workflow = (ROOT / ".github/workflows/fork_all_platforms.yml").read_text(encoding="utf-8")
         jobs = re.findall(r"^  ([a-z][a-z0-9-]*):$", workflow.split("jobs:\n", 1)[1], re.M)
         self.assertEqual(jobs, ["android-apk", "tv-apk", "ios", "macos", "windows", "linux"])
         self.assertNotRegex(workflow, r"(?m)^    needs:")
@@ -70,7 +70,7 @@ class InstallerIdentityTest(unittest.TestCase):
             self.assertIn('actual_package" != "' + identifier + '"', workflow)
 
     def test_missing_or_partial_keys_cannot_generate_test_signed_apks(self):
-        workflow = (ROOT / ".github/workflows/fork_all_platforms.yml").read_text()
+        workflow = (ROOT / ".github/workflows/fork_all_platforms.yml").read_text(encoding="utf-8")
         scripts = re.findall(r"python3 - <<'PY'\n(.*?)\n          PY", workflow, re.S)
         self.assertEqual(len(scripts), 2)
         for script in scripts:
@@ -84,7 +84,7 @@ class InstallerIdentityTest(unittest.TestCase):
                     if partial:
                         env["KEY_ALIAS"] = "test"
                     result = subprocess.run([sys.executable, "-c", textwrap.dedent(script)],
-                                            cwd=temp, env=env, capture_output=True, text=True)
+                                            cwd=temp, env=env, capture_output=True, text=True, encoding="utf-8")
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn("incomplete" if partial else "Stable release signing is required", result.stderr)
                     self.assertFalse((root / "android/key.properties").exists())

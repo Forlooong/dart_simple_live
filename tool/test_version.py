@@ -71,7 +71,7 @@ class VersionTest(unittest.TestCase):
         self.assertEqual(version.check_sync(self.root, "main"), "1.12.4+11105")
         self.assertEqual(version.check_sync(self.root, "tv"), "1.7.0+10605")
         self.assertEqual(tv_before, (self.root / version.APPS["tv"] / "pubspec.yaml").read_bytes())
-        self.assertIn('run-name: "Build all platforms · Main 1.12.4+11105 · TV 1.7.0+10605 · #${{ github.run_number }}"', self.workflow.read_text())
+        self.assertIn('run-name: "Build all platforms · Main 1.12.4+11105 · TV 1.7.0+10605 · #${{ github.run_number }}"', self.workflow.read_text(encoding="utf-8"))
         version.check_changes(self.root, "main", self.base)
         version.check_changes(self.root, "tv", self.base)
 
@@ -90,7 +90,7 @@ class VersionTest(unittest.TestCase):
         for app in version.APPS:
             version.check_sync(self.root, app)
             version.check_changes(self.root, app, self.base)
-        self.assertEqual(len(version.TITLE_LINE.findall(self.workflow.read_text())), 1)
+        self.assertEqual(len(version.TITLE_LINE.findall(self.workflow.read_text(encoding="utf-8"))), 1)
 
     def test_sync_changes_no_pubspec(self):
         before = {app: (self.root / directory / "pubspec.yaml").read_bytes() for app, directory in version.APPS.items()}
@@ -147,7 +147,7 @@ class VersionTest(unittest.TestCase):
         version.check_changes(self.root, "tv", self.base)
 
     def test_workflow_content_change_requires_both_apps_to_bump(self):
-        self.change(version.WORKFLOW, self.workflow.read_text().replace("jobs: {}", "jobs: {build: {}}"))
+        self.change(version.WORKFLOW, self.workflow.read_text(encoding="utf-8").replace("jobs: {}", "jobs: {build: {}}"))
         for app in version.APPS:
             with self.assertRaisesRegex(ValueError, f"{app} source changed"):
                 version.check_changes(self.root, app, self.base)
@@ -156,7 +156,7 @@ class VersionTest(unittest.TestCase):
             version.check_changes(self.root, app, self.base)
 
     def test_workflow_title_only_edit_is_not_a_shared_input_change(self):
-        self.change(version.WORKFLOW, version.TITLE_LINE.sub('run-name: "different title"', self.workflow.read_text()))
+        self.change(version.WORKFLOW, version.TITLE_LINE.sub('run-name: "different title"', self.workflow.read_text(encoding="utf-8")))
         for app in version.APPS:
             version.check_changes(self.root, app, self.base)
         with self.assertRaisesRegex(ValueError, "title does not match"):
