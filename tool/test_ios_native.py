@@ -25,9 +25,18 @@ def main():
             subprocess.run(["xcrun", "simctl", "boot", udid], check=True)
         subprocess.run(["xcrun", "simctl", "bootstatus", udid, "-b"], check=True)
         subprocess.run([
-            "flutter", "test", "--no-pub", "-d", udid,
+            "flutter", "test", "--no-pub", "--verbose", "-d", udid,
             "integration_test/native_smoke_test.dart",
         ], cwd=Path(__file__).resolve().parents[1] / "simple_live_app", check=True)
+    except subprocess.CalledProcessError:
+        print('[DEBUG-ios] Runner simulator logs', flush=True)
+        subprocess.run(['xcrun', 'simctl', 'spawn', udid, 'log', 'show',
+                        '--last', '15m', '--style', 'compact', '--predicate',
+                        'process == "Runner"'], check=False)
+        for report in sorted((Path.home() / 'Library/Logs/DiagnosticReports').glob('Runner*'))[-3:]:
+            print('[DEBUG-ios] Crash report:', report.name, flush=True)
+            print(report.read_text(errors='replace')[:20000], flush=True)
+        raise
     finally:
         subprocess.run(["xcrun", "simctl", "shutdown", udid], check=False)
 
