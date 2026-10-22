@@ -1,5 +1,5 @@
 name: Build applications
-run-name: "Build all platforms · Main 1.12.19+11120 · TV 1.7.10+10615 · #${{ github.run_number }}"
+run-name: "Build all platforms · Main 1.12.20+11121 · TV 1.7.11+10616 · #${{ github.run_number }}"
 
 on:
   push:
@@ -460,7 +460,7 @@ jobs:
           rm -f android/key.properties "$RUNNER_TEMP/simple-live-tv-release.jks"
 
   ios:
-    runs-on: macos-15
+    runs-on: macos-15-intel
     permissions:
       contents: read
       actions: write
@@ -578,7 +578,7 @@ jobs:
           PY
 
   macos:
-    runs-on: macos-15
+    runs-on: macos-15-intel
     env:
       # connectivity_plus uses APIs introduced in the Apple 26 SDKs.
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
