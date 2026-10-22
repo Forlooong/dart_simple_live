@@ -24,10 +24,14 @@ def main():
         if simulator["state"] != "Booted":
             subprocess.run(["xcrun", "simctl", "boot", udid], check=True)
         subprocess.run(["xcrun", "simctl", "bootstatus", udid, "-b"], check=True)
+        # Flutter's 12-minute suite-loading timeout includes the cold Xcode
+        # build. Bound the whole command instead so compilation cannot consume
+        # the test's startup allowance before the application launches.
         subprocess.run([
-            "flutter", "test", "--no-pub", "-d", udid,
+            "flutter", "test", "--no-pub", "--ignore-timeouts", "-d", udid,
             "integration_test/native_smoke_test.dart",
-        ], cwd=Path(__file__).resolve().parents[1] / "simple_live_app", check=True)
+        ], cwd=Path(__file__).resolve().parents[1] / "simple_live_app",
+            check=True, timeout=25 * 60)
     finally:
         subprocess.run(["xcrun", "simctl", "shutdown", udid], check=False)
 

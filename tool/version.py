@@ -11,7 +11,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 APPS = {"main": "simple_live_app", "tv": "simple_live_tv_app"}
-WORKFLOW = ".github/workflows/build.yml"
+WORKFLOW = ".github/workflows/installers.yml"
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\+([0-9]+)")
 VERSION_LINE = re.compile(r"^version: *(.*?) *$", re.MULTILINE)
 TITLE_LINE = re.compile(r"^run-name:.*$", re.MULTILINE)

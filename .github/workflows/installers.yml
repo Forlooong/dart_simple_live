@@ -1,5 +1,5 @@
-name: Build applications
-run-name: "Build all platforms · Main 1.12.21+11122 · TV 1.7.12+10617 · #${{ github.run_number }}"
+name: Build installers
+run-name: "Build all platforms · Main 1.12.22+11123 · TV 1.7.13+10618 · #${{ github.run_number }}"
 
 on:
   push:
@@ -568,7 +568,7 @@ jobs:
           else:
               raise RuntimeError('Other platforms have not finished; preserving previous builds.')
 
-          for run_id in (38694734171, 39715482478, 39715662525):
+          for run_id in (39719646047, 39732230598, 39733299758, 39738278725, 39740645168):
               try:
                   api('/actions/runs/' + str(run_id), 'DELETE')
               except HTTPError as error:

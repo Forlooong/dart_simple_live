@@ -1,6 +1,6 @@
 # Unified installer builds and version management
 
-One workflow, `Build applications` (`build.yml`), runs on
+One workflow, `Build installers` (`installers.yml`), runs on
 `master` pushes or manually. Its six independent jobs build Android, Android TV,
 iOS, macOS, Windows and Linux. A failed platform does not prevent the other jobs
 from completing. No tags or GitHub Releases are created.
@@ -96,6 +96,11 @@ No outer ZIPs, source bundles, checksum files or lockfiles are extra downloads.
 Summaries contain only the package version and download links. Checksums and
 build details remain in the step logs. Native libraries,
 ABI/alignment checks and existing main/TV regression tests remain enabled.
+
+The iOS simulator command has a 25-minute deadline covering compilation and
+execution. Flutter's default 12-minute suite-loading timeout is disabled because
+it also counts the cold Xcode build; test assertions and native execution budgets
+remain enabled.
 
 See [release gates](release-gates.md) for signing, runtime and real-device upgrade
 requirements. A version check and successful compile alone do not prove an
