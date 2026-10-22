@@ -120,7 +120,10 @@ class InstallerIdentityTest(unittest.TestCase):
         jobs = re.findall(r"^  ([a-z][a-z0-9-]*):$", workflow.split("jobs:\n", 1)[1], re.M)
         self.assertEqual(jobs, ["android-apk", "tv-apk", "ios", "macos", "windows", "linux"])
         self.assertNotRegex(workflow, r"(?m)^    needs:")
-        self.assertEqual(workflow.count("uses: actions/upload-artifact@v7"), 10)
+        upload_refs = re.findall(r"uses: actions/upload-artifact@([^\s]+)", workflow)
+        self.assertEqual(len(upload_refs), 10)
+        for ref in upload_refs:
+            self.assertRegex(ref, r"^[0-9a-f]{40}$")
         self.assertEqual(workflow.count("archive: false"), 10)
         self.assertNotIn("allowDebugReleaseSigning=true", workflow)
         self.assertNotIn("gh release", workflow)
