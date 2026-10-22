@@ -116,7 +116,7 @@ class InstallerIdentityTest(unittest.TestCase):
                     verify_report("main", report, path)
 
     def test_unified_workflow_keeps_independent_platforms_and_installers(self):
-        workflow = (ROOT / ".github/workflows/fork_all_platforms.yml").read_text(encoding="utf-8")
+        workflow = (ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
         jobs = re.findall(r"^  ([a-z][a-z0-9-]*):$", workflow.split("jobs:\n", 1)[1], re.M)
         self.assertEqual(jobs, ["android-apk", "tv-apk", "ios", "macos", "windows", "linux"])
         self.assertNotRegex(workflow, r"(?m)^    needs:")
@@ -135,7 +135,7 @@ class InstallerIdentityTest(unittest.TestCase):
             self.assertIn('actual_package" != "' + identifier + '"', workflow)
 
     def test_missing_or_partial_keys_cannot_generate_test_signed_apks(self):
-        workflow = (ROOT / ".github/workflows/fork_all_platforms.yml").read_text(encoding="utf-8")
+        workflow = (ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
         scripts = re.findall(r"python3 - <<'PY'\n(.*?)\n          PY", workflow, re.S)
         self.assertEqual(len(scripts), 2)
         for script in scripts:

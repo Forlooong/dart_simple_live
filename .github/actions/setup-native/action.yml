@@ -30,4 +30,4 @@ runs:
             xcrun --sdk macosx --show-sdk-version
             xcrun --sdk iphoneos --show-sdk-version
           fi
-        } >> "$GITHUB_STEP_SUMMARY"
+        }

@@ -1,6 +1,6 @@
 # Unified installer builds and version management
 
-One workflow, `app build action` (`fork_all_platforms.yml`), runs on
+One workflow, `Build applications` (`build.yml`), runs on
 `master` pushes or manually. Its six independent jobs build Android, Android TV,
 iOS, macOS, Windows and Linux. A failed platform does not prevent the other jobs
 from completing. No tags or GitHub Releases are created.
@@ -93,7 +93,8 @@ before claiming end-to-end upgrade success.
 Only the ten installer files are uploaded: six APKs, one IPA, one DMG, one EXE and
 one DEB. Each is an individual artifact with `archive: false`, retained for 14 days.
 No outer ZIPs, source bundles, checksum files or lockfiles are extra downloads.
-Checksums and build details appear in the workflow summaries. Native libraries,
+Summaries contain only the package version and download links. Checksums and
+build details remain in the step logs. Native libraries,
 ABI/alignment checks and existing main/TV regression tests remain enabled.
 
 See [release gates](release-gates.md) for signing, runtime and real-device upgrade

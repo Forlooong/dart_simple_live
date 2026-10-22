@@ -1,5 +1,5 @@
-name: app build action
-run-name: "Build all platforms · Main 1.12.18+11119 · TV 1.7.9+10614 · #${{ github.run_number }}"
+name: Build applications
+run-name: "Build all platforms · Main 1.12.19+11120 · TV 1.7.10+10615 · #${{ github.run_number }}"
 
 on:
   push:
@@ -135,7 +135,7 @@ jobs:
               fi
             done
             echo "Alignment check tool: $zipalign"
-          } >> "$GITHUB_STEP_SUMMARY"
+          }
           for apk in build/app/outputs/flutter-apk/app-*-release.apk; do
             "$zipalign" -c -P 16 4 "$apk"
           done
@@ -231,13 +231,8 @@ jobs:
           ARM32_URL: ${{ steps.upload_arm32.outputs.artifact-url }}
           X64_URL: ${{ steps.upload_x64.outputs.artifact-url }}
         run: |
-          {
-            printf '[Download arm64 APK](%s) · [Download arm32 APK](%s) · [Download x64 APK](%s)\n\n' "$ARM64_URL" "$ARM32_URL" "$X64_URL"
-            printf '%s\n' 'Sign in to GitHub and download the APK matching your device; no outer ZIP extraction is needed.' ''
-            cat build/apk-artifacts/BUILD-INFO.txt
-            printf '\nSHA-256 checksums:\n'
-            cat build/apk-artifacts/SHA256SUMS.txt
-          } >> "$GITHUB_STEP_SUMMARY"
+          printf '[arm64 APK](%s) · [arm32 APK](%s) · [x64 APK](%s)\n' "$ARM64_URL" "$ARM32_URL" "$X64_URL" >> "$GITHUB_STEP_SUMMARY"
+          cat build/apk-artifacts/BUILD-INFO.txt build/apk-artifacts/SHA256SUMS.txt
 
       - name: Remove temporary release signing files
         if: always()
@@ -359,7 +354,7 @@ jobs:
               fi
             done
             echo "Alignment check tool: $zipalign"
-          } >> "$GITHUB_STEP_SUMMARY"
+          }
           for apk in build/app/outputs/flutter-apk/app-*-release.apk; do
             "$zipalign" -c -P 16 4 "$apk"
           done
@@ -421,7 +416,7 @@ jobs:
             'The configured key must match the installed app; CI cannot recover a lost historical private key.' \
             > BUILD-INFO.txt
           cat FLUTTER-VERSION.txt >> BUILD-INFO.txt
-          printf '%s\n' "Android TV $APP_VERSION · arm32 / arm64 / x64 · $SIGNING_LABEL" >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "Android TV $APP_VERSION · arm32 / arm64 / x64 · $SIGNING_LABEL"
 
       - name: Upload arm64 APK
         id: upload_arm64
@@ -456,13 +451,8 @@ jobs:
           ARM32_URL: ${{ steps.upload_arm32.outputs.artifact-url }}
           X64_URL: ${{ steps.upload_x64.outputs.artifact-url }}
         run: |
-          {
-            printf '[Download arm64 APK](%s) · [Download arm32 APK](%s) · [Download x64 APK](%s)\n\n' "$ARM64_URL" "$ARM32_URL" "$X64_URL"
-            printf '%s\n' 'Sign in to GitHub and download the APK matching your device; no outer ZIP extraction is needed.' ''
-            cat build/apk-artifacts/BUILD-INFO.txt
-            printf '\nSHA-256 checksums:\n'
-            cat build/apk-artifacts/SHA256SUMS.txt
-          } >> "$GITHUB_STEP_SUMMARY"
+          printf '[arm64 APK](%s) · [arm32 APK](%s) · [x64 APK](%s)\n' "$ARM64_URL" "$ARM32_URL" "$X64_URL" >> "$GITHUB_STEP_SUMMARY"
+          cat build/apk-artifacts/BUILD-INFO.txt build/apk-artifacts/SHA256SUMS.txt
 
       - name: Remove temporary release signing files
         if: always()
@@ -471,6 +461,9 @@ jobs:
 
   ios:
     runs-on: macos-15
+    permissions:
+      contents: read
+      actions: write
     env:
       # connectivity_plus uses APIs introduced in the Apple 26 SDKs.
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
@@ -507,8 +500,8 @@ jobs:
       - name: Verify selected Xcode
         run: |
           test -d "$DEVELOPER_DIR" || { echo "Missing selected Xcode: $DEVELOPER_DIR"; exit 1; }
-          xcodebuild -version >> "$GITHUB_STEP_SUMMARY"
-          xcrun --sdk iphoneos --show-sdk-version >> "$GITHUB_STEP_SUMMARY"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
       - name: Build unsigned iOS app
         run: flutter build ios --release --no-codesign --no-pub
       - name: Verify device native libraries
@@ -528,8 +521,9 @@ jobs:
           (cd build/ipa && zip -qry "../artifacts/Simple-Live-${APP_VERSION}-iOS-arm64-Unsigned.ipa" Payload)
           unzip -t build/artifacts/*.ipa
           (cd build/artifacts && shasum -a 256 *.ipa > SHA256SUMS.txt)
-          printf '%s\n' "iOS $APP_VERSION · arm64 · unsigned IPA" 'Requires signing with an Apple development/distribution identity before installation.' >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "iOS $APP_VERSION · arm64 · unsigned IPA" 'Requires signing with an Apple development/distribution identity before installation.'
       - name: Upload iOS package
+        id: upload_package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: Simple-Live-${{ steps.metadata.outputs.artifact_version }}-iOS-arm64-Unsigned
@@ -537,6 +531,51 @@ jobs:
           archive: false
           if-no-files-found: error
           retention-days: 14
+      - name: Summarize download
+        env:
+          DOWNLOAD_URL: ${{ steps.upload_package.outputs.artifact-url }}
+        run: printf '[iOS IPA · unsigned](%s)\n' "$DOWNLOAD_URL" >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove previous build records once
+        if: github.repository == 'Forlooong/dart_simple_live' && github.run_number == 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.error import HTTPError
+          from urllib.request import Request, urlopen
+
+          base = 'https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY']
+          headers = {'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                     'Accept': 'application/vnd.github+json',
+                     'X-GitHub-Api-Version': '2022-11-28'}
+
+          def api(path, method='GET'):
+              with urlopen(Request(base + path, headers=headers, method=method), timeout=30) as response:
+                  return json.load(response) if method == 'GET' else None
+
+          expected = {'android-apk', 'tv-apk', 'macos', 'windows', 'linux'}
+          for attempt in range(30):
+              jobs = api('/actions/runs/' + os.environ['GITHUB_RUN_ID'] + '/jobs?per_page=100')['jobs']
+              peers = {job['name']: job for job in jobs if job['name'] in expected}
+              if set(peers) == expected and all(job['conclusion'] == 'success' for job in peers.values()):
+                  break
+              if any(job['status'] == 'completed' and job['conclusion'] != 'success' for job in peers.values()):
+                  raise RuntimeError('A platform failed; preserving previous builds.')
+              time.sleep(10)
+          else:
+              raise RuntimeError('Other platforms have not finished; preserving previous builds.')
+
+          for run_id in (38694734171, 39715482478, 39715662525):
+              try:
+                  api('/actions/runs/' + str(run_id), 'DELETE')
+              except HTTPError as error:
+                  if error.code != 404:
+                      raise
+              print('Removed previous run', run_id)
+          PY
 
   macos:
     runs-on: macos-15
@@ -618,9 +657,10 @@ jobs:
           hdiutil detach "$mountpoint"
           trap - EXIT
           (cd build/artifacts && shasum -a 256 *.dmg > SHA256SUMS.txt)
-          printf '%s\n' "macOS $APP_VERSION · arm64 + x64 · unsigned DMG" 'Open the DMG and drag Simple Live to Applications. Not notarized; macOS may prevent opening this build.' >> "$GITHUB_STEP_SUMMARY"
-          cat build/artifacts/SHA256SUMS.txt >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "macOS $APP_VERSION · arm64 + x64 · unsigned DMG" 'Open the DMG and drag Simple Live to Applications. Not notarized; macOS may prevent opening this build.'
+          cat build/artifacts/SHA256SUMS.txt
       - name: Upload macOS package
+        id: upload_package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: Simple-Live-${{ steps.metadata.outputs.artifact_version }}-macOS-universal-Unsigned
@@ -628,6 +668,10 @@ jobs:
           archive: false
           if-no-files-found: error
           retention-days: 14
+      - name: Summarize download
+        env:
+          DOWNLOAD_URL: ${{ steps.upload_package.outputs.artifact-url }}
+        run: printf '[macOS DMG · unsigned](%s)\n' "$DOWNLOAD_URL" >> "$GITHUB_STEP_SUMMARY"
 
   windows:
     runs-on: windows-2022
@@ -741,9 +785,10 @@ jobs:
           python ../tool/verify_native_bundle.py windows "$installed"
           if ($LASTEXITCODE -ne 0) { throw 'Installed native bundle verification failed' }
           $hash = Get-FileHash $installer -Algorithm SHA256
-          "Windows $env:APP_VERSION · x64 · unsigned installer EXE. Requires Microsoft Visual C++ x64 runtime." >> $env:GITHUB_STEP_SUMMARY
-          "$($hash.Hash.ToLower())  $basename.exe" >> $env:GITHUB_STEP_SUMMARY
+          "Windows $env:APP_VERSION · x64 · unsigned installer EXE. Requires Microsoft Visual C++ x64 runtime."
+          "$($hash.Hash.ToLower())  $basename.exe"
       - name: Upload Windows package
+        id: upload_package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: Simple-Live-${{ steps.metadata.outputs.artifact_version }}-Windows-x64-Unsigned
@@ -751,6 +796,10 @@ jobs:
           archive: false
           if-no-files-found: error
           retention-days: 14
+      - name: Summarize download
+        env:
+          DOWNLOAD_URL: ${{ steps.upload_package.outputs.artifact-url }}
+        run: printf '[Windows EXE · unsigned](%s)\n' "$DOWNLOAD_URL" >> "$GITHUB_STEP_SUMMARY"
 
   linux:
     runs-on: ubuntu-22.04
@@ -860,9 +909,10 @@ jobs:
             fi
           done < <(find "$extracted/opt/simple-live" -type f -print0)
           (cd build/artifacts && sha256sum *.deb > SHA256SUMS.txt)
-          printf '%s\n' "Linux $APP_VERSION · amd64 · DEB" 'For Ubuntu 22.04 or compatible distributions with libmpv1. Install using sudo apt install ./Simple-Live-*.deb so dependencies are resolved.' >> "$GITHUB_STEP_SUMMARY"
-          cat build/artifacts/SHA256SUMS.txt >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "Linux $APP_VERSION · amd64 · DEB" 'For Ubuntu 22.04 or compatible distributions with libmpv1. Install using sudo apt install ./Simple-Live-*.deb so dependencies are resolved.'
+          cat build/artifacts/SHA256SUMS.txt
       - name: Upload Linux package
+        id: upload_package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: Simple-Live-${{ steps.metadata.outputs.artifact_version }}-Linux-x64-Release
@@ -870,3 +920,7 @@ jobs:
           archive: false
           if-no-files-found: error
           retention-days: 14
+      - name: Summarize download
+        env:
+          DOWNLOAD_URL: ${{ steps.upload_package.outputs.artifact-url }}
+        run: printf '[Linux DEB](%s)\n' "$DOWNLOAD_URL" >> "$GITHUB_STEP_SUMMARY"

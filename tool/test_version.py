@@ -203,7 +203,7 @@ class VersionTest(unittest.TestCase):
     def test_stale_workflow_title_fails_for_either_app(self):
         self.change(version.WORKFLOW, 'run-name: "Release iOS · 1.12.3"\n')
         for app in version.APPS:
-            with self.assertRaisesRegex(ValueError, "fork_all_platforms.yml"):
+            with self.assertRaisesRegex(ValueError, "build.yml"):
                 version.check_sync(self.root, app)
 
     def test_invalid_workflow_does_not_partially_bump_files(self):

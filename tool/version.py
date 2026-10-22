@@ -11,7 +11,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 APPS = {"main": "simple_live_app", "tv": "simple_live_tv_app"}
-WORKFLOW = ".github/workflows/fork_all_platforms.yml"
+WORKFLOW = ".github/workflows/build.yml"
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\+([0-9]+)")
 VERSION_LINE = re.compile(r"^version: *(.*?) *$", re.MULTILINE)
 TITLE_LINE = re.compile(r"^run-name:.*$", re.MULTILINE)
@@ -228,12 +228,8 @@ def main():
             for key, value in metadata.items():
                 output.write(f"{key}={value}\n")
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
-            output.write(
-                "## Build identity\n\n"
-                f"- Package version: `{version}`\n"
-                f"- Artifact version: `{metadata['artifact_version']}`\n"
-                f"- Commit: `{os.environ['GITHUB_SHA']}`\n\n"
-            )
+            output.write(f"Version: `{version}`\n\n")
+        print(f"Artifact: {metadata['artifact_version']}; commit: {os.environ['GITHUB_SHA']}")
 
 
 if __name__ == "__main__":
