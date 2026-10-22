@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:simple_live_app/routes/app_navigation.dart';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:simple_live_app/app/sites.dart';
@@ -84,6 +87,49 @@ void _selectQuality(_Controller controller) {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  testWidgets(
+    'a hung cleanup offers cancellable navigation without disposing again',
+    (tester) async {
+      await tester.pumpWidget(
+        const GetMaterialApp(home: Scaffold(body: Text('rooms'))),
+      );
+      final cleanup = Completer<void>();
+      final waiting = AppNavigator.waitForPlayerCleanup(cleanup.future);
+      expect(
+        identical(waiting, AppNavigator.waitForPlayerCleanup(cleanup.future)),
+        isTrue,
+      );
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pumpAndSettle();
+      expect(find.text('正在关闭上一个播放器'), findsOneWidget);
+      await tester.tap(find.text('取消打开'));
+      // Completion during the dialog's closing animation must not pop the page.
+      cleanup.complete();
+      await tester.pumpAndSettle();
+      expect(await waiting, isFalse);
+      await tester.pumpAndSettle();
+      expect(find.text('rooms'), findsOneWidget);
+      Get.reset();
+    },
+  );
+
+  testWidgets('completed cleanup releases its waiting navigation', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const GetMaterialApp(home: Scaffold(body: Text('rooms'))),
+    );
+    final cleanup = Completer<void>();
+    final waiting = AppNavigator.waitForPlayerCleanup(cleanup.future);
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pumpAndSettle();
+    cleanup.complete();
+    await tester.pumpAndSettle();
+    expect(await waiting, isTrue);
+    expect(find.text('正在关闭上一个播放器'), findsNothing);
+    Get.reset();
+  });
 
   test(
     'a slower old quality response cannot replace the latest playlist',

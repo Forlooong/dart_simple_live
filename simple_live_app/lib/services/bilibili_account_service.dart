@@ -18,28 +18,39 @@ class BiliBiliAccountService extends GetxService {
 
   var cookie = "";
   var uid = 0;
+  int _accountRevision = 0;
+  int _userInfoRequest = 0;
   var name = "未登录".obs;
 
   @override
   void onInit() {
-    cookie = LocalStorageService.instance
-        .getValue(LocalStorageService.kBilibiliCookie, "");
+    cookie = LocalStorageService.instance.getValue(
+      LocalStorageService.kBilibiliCookie,
+      "",
+    );
     logined.value = cookie.isNotEmpty;
+    setSite();
     loadUserInfo();
     super.onInit();
   }
 
-  Future loadUserInfo() async {
+  Future<void> loadUserInfo() async {
     if (cookie.isEmpty) {
       return;
     }
+    final revision = _accountRevision;
+    final request = ++_userInfoRequest;
+    final requestedCookie = cookie;
+    bool current() =>
+        revision == _accountRevision &&
+        request == _userInfoRequest &&
+        cookie == requestedCookie;
     try {
       var result = await HttpClient.instance.getJson(
         "https://api.bilibili.com/x/member/web/account",
-        header: {
-          "Cookie": cookie,
-        },
+        header: {"Cookie": requestedCookie},
       );
+      if (!current()) return;
       if (result["code"] == 0) {
         var info = BiliBiliUserInfoModel.fromJson(result["data"]);
         name.value = info.uname ?? "未登录";
@@ -47,9 +58,10 @@ class BiliBiliAccountService extends GetxService {
         setSite();
       } else {
         SmartDialog.showToast("哔哩哔哩登录已失效，请重新登录");
-        logout();
+        await logout();
       }
     } catch (e) {
+      if (!current()) return;
       SmartDialog.showToast("获取哔哩哔哩用户信息失败，可前往账号管理重试");
     }
   }
@@ -60,25 +72,34 @@ class BiliBiliAccountService extends GetxService {
     site.cookie = cookie;
   }
 
-  void setCookie(String cookie) {
+  Future<void> setCookie(String cookie) async {
+    // Invalidate pending account checks before waiting for the vault. Only a
+    // successful write changes the in-memory session and provider credentials.
+    _accountRevision++;
+    await LocalStorageService.instance.setValue(
+      LocalStorageService.kBilibiliCookie,
+      cookie,
+    );
+    _accountRevision++;
     this.cookie = cookie;
-    LocalStorageService.instance
-        .setValue(LocalStorageService.kBilibiliCookie, cookie);
-    logined.value = cookie.isNotEmpty;
-  }
-
-  void logout() async {
-    cookie = "";
     uid = 0;
     name.value = "未登录";
+    logined.value = cookie.isNotEmpty;
     setSite();
-    LocalStorageService.instance
-        .setValue(LocalStorageService.kBilibiliCookie, "");
-    logined.value = false;
+  }
+
+  Future<void> logout() async {
+    await setCookie('');
 
     if (Platform.isAndroid || Platform.isIOS) {
       CookieManager cookieManager = CookieManager.instance();
       await cookieManager.deleteAllCookies();
     }
+  }
+
+  @override
+  void onClose() {
+    _accountRevision++;
+    super.onClose();
   }
 }

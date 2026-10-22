@@ -120,6 +120,35 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   Object? error;
   StackTrace? errorStack;
 
+  RequestContext? _sourceRequest;
+
+  RequestContext _newSourceRequest() {
+    _sourceRequest?.cancel();
+    return _sourceRequest = RequestContext();
+  }
+
+  Future<void> _requestSource(Future<void> Function() operation) async {
+    // The room -> qualities -> URLs chain shares one deadline and token.
+    if (RequestContext.current != null &&
+        identical(RequestContext.current, _sourceRequest)) {
+      await operation();
+      return;
+    }
+    if (playerClosing) return;
+    final request = _newSourceRequest();
+    try {
+      await request.run(operation);
+    } catch (error) {
+      if (!identical(request, _sourceRequest) ||
+          playerClosing ||
+          (error is CoreError && error.kind == CoreErrorKind.cancelled)) {
+        return;
+      }
+      errorMsg.value = '读取播放源失败，请刷新重试';
+      showPlaybackFailure();
+    }
+  }
+
   int _roomGeneration = 0;
   int _playGeneration = 0;
   bool _playlistReady = false;
@@ -143,10 +172,15 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   bool _isCurrentRoom(int generation) =>
       !playerClosing && generation == _roomGeneration;
 
+  bool _isCurrentSource(int generation) =>
+      _isCurrentRoom(generation) &&
+      !(RequestContext.current?.isCancelled ?? false);
+
   bool _isCurrentPlayback(int room, int playback) =>
       _isCurrentRoom(room) && playback == _playGeneration;
 
-  void _invalidatePlayback() {
+  void _invalidatePlayback({bool cancelSource = true}) {
+    if (cancelSource) _sourceRequest?.cancel();
     _playGeneration++;
     _resetRecovery();
     _playlistReady = false;
@@ -516,13 +550,15 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   }
 
   /// 加载直播间信息
-  Future<void> loadData() async {
+  Future<void> loadData() => _requestSource(_loadData);
+
+  Future<void> _loadData() async {
     if (playerClosing) return;
     final generation = ++_roomGeneration;
     _invalidateMessageBatch();
     final requestedSite = site;
     final requestedRoom = roomId;
-    _invalidatePlayback();
+    _invalidatePlayback(cancelSource: false);
     _liveDurationTimer?.cancel();
     try {
       SmartDialog.showLoading(msg: "");
@@ -531,8 +567,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       errorStack = null;
       update();
       addSysMsg("正在读取直播间信息");
-      final roomDetail = await requestedSite.liveSite.getRoomDetail(
-        roomId: requestedRoom,
+      final roomDetail = await playbackDiagnostics.measure(
+        PlaybackStage.room,
+        () => requestedSite.liveSite.getRoomDetail(roomId: requestedRoom),
       );
       if (!_isCurrentRoom(generation)) return;
       detail.value = roomDetail;
@@ -598,7 +635,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       online.value = detail.value!.online;
       liveStatus.value = detail.value!.status || detail.value!.isRecord;
       if (liveStatus.value) {
-        getPlayQualites(generation);
+        await getPlayQualites(generation);
       } else {
         // A manual refresh can confirm that the current stream is offline.
         // Invalidating its URL state alone does not unload native playback.
@@ -615,6 +652,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       unawaited(_startDanmaku(generation, detail.value?.danmakuData));
       startLiveDurationTimer(); // 启动开播时长定时器
     } catch (e, stack) {
+      if (RequestContext.current?.isCancelled ?? false) return;
       if (!_isCurrentRoom(generation)) return;
       Log.logPrint(e);
       loadError.value = true;
@@ -639,24 +677,28 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   }
 
   /// 初始化播放器
-  Future<void> getPlayQualites([int? roomGeneration]) async {
+  Future<void> getPlayQualites([int? roomGeneration]) =>
+      _requestSource(() => _getPlayQualites(roomGeneration));
+
+  Future<void> _getPlayQualites(int? roomGeneration) async {
     final generation = roomGeneration ?? _roomGeneration;
-    if (!_isCurrentRoom(generation) || detail.value == null) return;
+    if (!_isCurrentSource(generation) || detail.value == null) return;
     final requestedSite = site;
     final requestedDetail = detail.value!;
     qualites.clear();
     currentQuality = -1;
     try {
-      final qualities = await requestedSite.liveSite.getPlayQualites(
-        detail: requestedDetail,
+      final qualities = await playbackDiagnostics.measure(
+        PlaybackStage.quality,
+        () => requestedSite.liveSite.getPlayQualites(detail: requestedDetail),
       );
-      if (!_isCurrentRoom(generation)) return;
+      if (!_isCurrentSource(generation)) return;
       if (qualities.isEmpty) {
         SmartDialog.showToast("无法读取播放清晰度");
         return;
       }
       final qualityLevel = await getQualityLevel();
-      if (!_isCurrentRoom(generation)) return;
+      if (!_isCurrentSource(generation)) return;
       qualites.value = qualities;
       currentQuality = qualityLevel == 2
           ? 0
@@ -665,7 +707,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
               : qualities.length ~/ 2;
       await getPlayUrl();
     } catch (e) {
-      if (!_isCurrentRoom(generation)) return;
+      if (!_isCurrentSource(generation)) return;
       Log.logPrint(e);
       SmartDialog.showToast("无法读取播放清晰度");
     }
@@ -685,7 +727,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     return qualityLevel;
   }
 
-  Future<void> getPlayUrl() async {
+  Future<void> getPlayUrl() => _requestSource(_getPlayUrl);
+
+  Future<void> _getPlayUrl() async {
     if (playerClosing ||
         detail.value == null ||
         currentQuality < 0 ||
@@ -704,9 +748,12 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     currentLineInfo.value = "";
     currentLineIndex = -1;
     try {
-      final playUrl = await requestedSite.liveSite.getPlayUrls(
-        detail: requestedDetail,
-        quality: quality,
+      final playUrl = await playbackDiagnostics.measure(
+        PlaybackStage.urls,
+        () => requestedSite.liveSite.getPlayUrls(
+          detail: requestedDetail,
+          quality: quality,
+        ),
       );
       if (!_isCurrentPlayback(room, playback)) return;
       if (playUrl.urls.isEmpty) {
@@ -734,6 +781,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         index >= playUrls.length) {
       return;
     }
+    _sourceRequest?.cancel();
     // Invalidate any delayed retry for the previous selection.
     _playGeneration++;
     _resetRecovery();
@@ -764,7 +812,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       // advancing to another line independently of application recovery.
       // open() also avoids jump() -> play() -> seek(0) on an ended live FLV.
       playbackDiagnostics.opened();
-      await player.open(media);
+      await playbackDiagnostics.measure(
+        PlaybackStage.open,
+        () => player.open(media),
+      );
     });
   }
 
@@ -799,6 +850,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   @override
   void mediaEnd() {
     if (playerClosing || !_playlistReady) return;
+    playbackDiagnostics.terminal(PlaybackTerminal.eof);
     super.mediaEnd();
     _retryPlayback();
   }
@@ -807,6 +859,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   @override
   void mediaError(String error) {
     if (playerClosing || !_playlistReady) return;
+    playbackDiagnostics.terminal(PlaybackTerminal.error);
     super.mediaError(error);
     _retryPlayback();
   }
@@ -860,12 +913,24 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         playbackDiagnostics.recoveryAttempt();
         Log.i("播放恢复：第 $attempt 次，重新获取直播地址");
         try {
-          if (!await _refreshPlaybackSource(room, playback)) return;
+          final request = _newSourceRequest();
+          if (!await request.run(
+            () => _refreshPlaybackSource(room, playback),
+          )) {
+            return;
+          }
           await initPlaylist();
           return;
         } catch (e, stack) {
           if (!_isCurrentPlayback(room, playback)) return;
           Log.e("播放恢复失败：${e.runtimeType}", stack);
+          if (e is CoreError && !e.retriable) {
+            if (e.kind == CoreErrorKind.cancelled) return;
+            _recoveryExhausted = true;
+            errorMsg.value = e.toString();
+            showPlaybackFailure();
+            return;
+          }
           // HTTP/open exceptions may not emit a native terminal event.
           // Retry them here, under the same bounded recovery owner.
         }
@@ -884,12 +949,14 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   Future<bool> _refreshPlaybackSource(int room, int playback) async {
     final requestedSite = site;
-    final selectedQuality = qualites[currentQuality].quality;
+    final selectedQuality = qualites[currentQuality];
     final selectedIndex = currentQuality;
     // Douyu keeps its timestamped signing arguments in detail.data; Douyin
     // keeps URLs in quality.data. Refresh the whole source, not only the URL.
-    final freshDetail =
-        await requestedSite.liveSite.getRoomDetail(roomId: roomId);
+    final freshDetail = await playbackDiagnostics.measure(
+      PlaybackStage.room,
+      () => requestedSite.liveSite.getRoomDetail(roomId: roomId),
+    );
     if (!_isCurrentPlayback(room, playback)) return false;
     if (!freshDetail.status && !freshDetail.isRecord) {
       _recoveryExhausted = true;
@@ -900,18 +967,29 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       });
       return false;
     }
-    final freshQualities =
-        await requestedSite.liveSite.getPlayQualites(detail: freshDetail);
+    final freshQualities = await playbackDiagnostics.measure(
+      PlaybackStage.quality,
+      () => requestedSite.liveSite.getPlayQualites(detail: freshDetail),
+    );
     if (!_isCurrentPlayback(room, playback)) return false;
     if (freshQualities.isEmpty) throw StateError('No live qualities');
-    var qualityIndex =
-        freshQualities.indexWhere((item) => item.quality == selectedQuality);
+    var qualityIndex = selectedQuality.id == null
+        ? -1
+        : freshQualities.indexWhere((item) => item.id == selectedQuality.id);
+    if (qualityIndex < 0) {
+      qualityIndex = freshQualities.indexWhere(
+        (item) => item.quality == selectedQuality.quality,
+      );
+    }
     if (qualityIndex < 0) {
       qualityIndex = selectedIndex.clamp(0, freshQualities.length - 1);
     }
-    final freshUrls = await requestedSite.liveSite.getPlayUrls(
-      detail: freshDetail,
-      quality: freshQualities[qualityIndex],
+    final freshUrls = await playbackDiagnostics.measure(
+      PlaybackStage.urls,
+      () => requestedSite.liveSite.getPlayUrls(
+        detail: freshDetail,
+        quality: freshQualities[qualityIndex],
+      ),
     );
     if (!_isCurrentPlayback(room, playback)) return false;
     if (freshUrls.urls.isEmpty) throw StateError('No live URLs');
@@ -947,6 +1025,12 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   void showPlaybackFailure() {
     SmartDialog.showToast(errorMsg.value);
+  }
+
+  @override
+  Future<void> closePlayer() {
+    _sourceRequest?.cancel();
+    return super.closePlayer();
   }
 
   /// 读取SC

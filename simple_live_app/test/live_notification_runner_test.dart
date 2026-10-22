@@ -1,3 +1,4 @@
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -99,6 +100,7 @@ Future<Directory> _temporaryDirectory() async {
 }
 
 void main() {
+  setUp(() { FlutterSecureStorage.setMockInitialValues({}); });
   group('LiveCheckRunner', () {
     test('an empty selection never checks or alerts', () async {
       final checked = <String>[];
@@ -475,6 +477,8 @@ void main() {
         douyinCookie: 'new second cookie',
       );
       await writer.writeConfig(old);
+      expect(await File('${directory.path}/subscriptions.json').readAsString(),
+          isNot(contains('cookie')));
       await writer.writeState({'rooms': {}, 'cursor': 'old cursor'});
       await File('${directory.path}/subscriptions.json.tmp')
           .writeAsString('{"rooms":[');

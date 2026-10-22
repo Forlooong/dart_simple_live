@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:simple_live_core/simple_live_core.dart';
 
 import 'package:canvas_danmaku/canvas_danmaku.dart';
 import 'package:device_info_plus/device_info_plus.dart';
@@ -13,6 +14,14 @@ import 'package:simple_live_tv_app/app/log.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 mixin PlayerMixin {
+  final playbackDiagnostics = PlaybackDiagnostics();
+  final _playerCommands = PlayerCommandQueue(
+    onError: (error, stack) => Log.e('播放器命令失败：${error.runtimeType}', stack),
+  );
+  bool get playerClosing => _playerCommands.isClosing;
+  Future<void> runPlayerCommand(Future<void> Function() command) =>
+      _playerCommands.run(command);
+
   GlobalKey<VideoState> globalPlayerKey = GlobalKey<VideoState>();
   GlobalKey globalDanmuKey = GlobalKey();
 
@@ -28,9 +37,12 @@ mixin PlayerMixin {
 
   /// 初始化播放器并设置 ao 参数
   Future<void> initializePlayer() async {
-    var pp = player.platform as NativePlayer;
+    if (playerClosing) return;
+    final pp = player.platform;
+    if (pp is! NativePlayer) return;
 
-    // media_kit 仓库更新导致的问题，临时解决办法
+    // Preserve the existing TV Android seekability workaround until live
+    // FLV/HLS and record playback have been verified on TV hardware.
     if (Platform.isAndroid) {
       await pp.setProperty('force-seekable', 'yes');
     }
@@ -234,10 +246,14 @@ class PlayerController extends BaseController
   StreamSubscription? _widthSubscription;
   StreamSubscription? _heightSubscription;
   StreamSubscription? _logSubscription;
+  StreamSubscription? _positionSubscription;
+  StreamSubscription? _playingSubscription;
+  StreamSubscription? _bufferingSubscription;
 
   void initStream() {
     _errorSubscription = player.stream.error.listen((event) {
-      Log.d("播放器错误：$event");
+      if (playerClosing) return;
+      Log.d("播放器错误事件");
       if (event.contains('no sound.')) {
         return;
       }
@@ -246,14 +262,26 @@ class PlayerController extends BaseController
     });
 
     _completedSubscription = player.stream.completed.listen((event) {
-      if (event) {
+      if (!playerClosing && event) {
         mediaEnd();
       }
     });
+    _positionSubscription = player.stream.position.listen((position) {
+      if (playerClosing) return;
+      playbackDiagnostics.position(position);
+      mediaPosition(position);
+    });
+    _playingSubscription = player.stream.playing.listen((value) {
+      if (!playerClosing) playbackDiagnostics.playing(value);
+    });
+    _bufferingSubscription = player.stream.buffering.listen((value) {
+      if (!playerClosing) playbackDiagnostics.buffering(value);
+    });
     _logSubscription = player.stream.log.listen((event) {
-      Log.d("播放器日志：$event");
+      // Native provider messages may contain signed URLs. Do not persist them.
     });
     _widthSubscription = player.stream.width.listen((event) {
+      if (playerClosing) return;
       Log.w(
           'width:$event  W:${(player.state.width)}  H:${(player.state.height)}');
       width.value = event ?? 0;
@@ -261,6 +289,7 @@ class PlayerController extends BaseController
       //     (player.state.height ?? 9) > (player.state.width ?? 16);
     });
     _heightSubscription = player.stream.height.listen((event) {
+      if (playerClosing) return;
       Log.w(
           'height:$event  W:${(player.state.width)}  H:${(player.state.height)}');
       height.value = event ?? 0;
@@ -269,25 +298,55 @@ class PlayerController extends BaseController
     });
   }
 
-  void disposeStream() {
-    _errorSubscription?.cancel();
-    _completedSubscription?.cancel();
-    _widthSubscription?.cancel();
-    _heightSubscription?.cancel();
-    _logSubscription?.cancel();
+  Future<void> disposeStream() async {
+    await Future.wait<void>([
+      if (_errorSubscription != null) _errorSubscription!.cancel(),
+      if (_completedSubscription != null) _completedSubscription!.cancel(),
+      if (_widthSubscription != null) _widthSubscription!.cancel(),
+      if (_heightSubscription != null) _heightSubscription!.cancel(),
+      if (_logSubscription != null) _logSubscription!.cancel(),
+      if (_positionSubscription != null) _positionSubscription!.cancel(),
+      if (_playingSubscription != null) _playingSubscription!.cancel(),
+      if (_bufferingSubscription != null) _bufferingSubscription!.cancel(),
+    ]);
   }
 
   void mediaEnd() {}
-
   void mediaError(String error) {}
+  void mediaPosition(Duration position) {}
+
+  Future<void>? _closeFuture;
+  static Future<void> _pendingCleanup = Future<void>.value();
+  static Future<void> get pendingCleanup => _pendingCleanup;
+
+  Future<void> closePlayer() {
+    if (_closeFuture != null) return _closeFuture!;
+    _playerCommands.stopAcceptingCommands();
+    playbackDiagnostics.close();
+    hideControlsTimer?.cancel();
+    hideSeekTipTimer?.cancel();
+    disposeDanmakuController();
+    final streamsCanceled = disposeStream().catchError(
+      (Object error, StackTrace stack) => Log.e('播放器订阅关闭失败', stack),
+    );
+    final closed = _closeFuture = _playerCommands.close(() async {
+      await streamsCanceled;
+      try {
+        await player.dispose();
+      } finally {
+        await resetSystem();
+      }
+    });
+    _pendingCleanup = Future.wait<void>([
+      _pendingCleanup,
+      closed.then<void>((_) {}, onError: (Object _, StackTrace __) {}),
+    ]).then<void>((_) {});
+    return closed;
+  }
 
   @override
-  void onClose() async {
-    Log.w("播放器关闭");
-    disposeStream();
-    disposeDanmakuController();
-    await resetSystem();
-    await player.dispose();
+  void onClose() {
+    unawaited(closePlayer());
     super.onClose();
   }
 }

@@ -22,6 +22,10 @@ class JsException implements Exception {
   }
 }
 
+class JsExecutionTimeoutException extends JsException {
+  const JsExecutionTimeoutException() : super('JavaScript execution timed out');
+}
+
 /// Exception thrown when the JavaScript runtime is used after being disposed.
 class JsRuntimeDisposedException implements Exception {
   /// Creates a new [JsRuntimeDisposedException].

@@ -104,6 +104,39 @@ void main() {
     },
   );
 
+  test('stage timings and first progress use fixed labels', () async {
+    await diagnostics.measure(PlaybackStage.urls, () async {
+      now = const Duration(milliseconds: 120);
+    });
+    diagnostics.opened();
+    diagnostics.position(Duration.zero);
+    diagnostics.position(const Duration(seconds: 1));
+    diagnostics.position(const Duration(seconds: 2));
+    expect(
+      diagnostics.snapshot(),
+      contains('stage=urls completed elapsed=120ms'),
+    );
+    expect(
+      diagnostics.events.where((event) => event.contains('firstProgress')),
+      hasLength(1),
+    );
+  });
+
+  test('long buffering preserves one bounded summary without recovery', () {
+    diagnostics.opened();
+    diagnostics.buffering(true);
+    now = const Duration(seconds: 16);
+    final snapshot = diagnostics.snapshot();
+    expect(snapshot, contains('持续缓冲摘要'));
+    diagnostics.buffering(false);
+    for (var i = 0; i < 100; i++) {
+      diagnostics.playing(i.isEven);
+    }
+    expect(diagnostics.snapshot(), contains('0ms buffering=true'));
+    expect(diagnostics.snapshot(), contains('本播放器自动恢复尝试: 0'));
+    expect(diagnostics.events, hasLength(PlaybackDiagnostics.maxEvents));
+  });
+
   test('summary contains only local fixed labels and typed numeric data', () {
     diagnostics.opened();
     diagnostics.playing(true);

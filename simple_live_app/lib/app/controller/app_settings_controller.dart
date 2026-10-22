@@ -18,11 +18,26 @@ class AppSettingsController extends GetxController {
   var scaleMode = 0.obs;
 
   var themeMode = 0.obs;
+  var windowPaddingWorkaround = false.obs;
+
+  Future<void> setWindowPaddingWorkaround(bool enabled) async {
+    await LocalStorageService.instance.setValue('WindowPaddingWorkaround', enabled);
+    windowPaddingWorkaround.value = enabled;
+    Get.forceAppUpdate();
+  }
+
 
   var firstRun = false;
 
   @override
   void onInit() {
+    reloadSettings(initializeLog: true);
+    super.onInit();
+  }
+
+  void reloadSettings({bool initializeLog = false}) {
+    windowPaddingWorkaround.value = LocalStorageService.instance
+        .getValue('WindowPaddingWorkaround', false);
     themeMode.value = LocalStorageService.instance
         .getValue(LocalStorageService.kThemeMode, 0);
     firstRun = LocalStorageService.instance
@@ -114,7 +129,7 @@ class AppSettingsController extends GetxController {
 
     logEnable.value = LocalStorageService.instance
         .getValue(LocalStorageService.kLogEnable, false);
-    if (logEnable.value) {
+    if (initializeLog && logEnable.value) {
       Log.initWriter();
     }
 
@@ -159,8 +174,6 @@ class AppSettingsController extends GetxController {
 
     initSiteSort();
     initHomeSort();
-
-    super.onInit();
   }
 
   void initSiteSort() {
@@ -170,15 +183,7 @@ class AppSettingsController extends GetxController {
           Sites.allSites.keys.join(","),
         )
         .split(",");
-    //如果数量与allSites的数量不一致，将缺失的添加上
-    if (sort.length != Sites.allSites.length) {
-      var keys = Sites.allSites.keys.toList();
-      for (var i = 0; i < keys.length; i++) {
-        if (!sort.contains(keys[i])) {
-          sort.add(keys[i]);
-        }
-      }
-    }
+    sort = {...sort.where(Sites.allSites.containsKey), ...Sites.allSites.keys}.toList();
 
     siteSort.value = sort;
   }
@@ -190,15 +195,8 @@ class AppSettingsController extends GetxController {
           Constant.allHomePages.keys.join(","),
         )
         .split(",");
-    //如果数量与allSites的数量不一致，将缺失的添加上
-    if (sort.length != Constant.allHomePages.length) {
-      var keys = Constant.allHomePages.keys.toList();
-      for (var i = 0; i < keys.length; i++) {
-        if (!sort.contains(keys[i])) {
-          sort.add(keys[i]);
-        }
-      }
-    }
+    sort = {...sort.where(Constant.allHomePages.containsKey),
+      ...Constant.allHomePages.keys}.toList();
 
     homeSort.value = sort;
   }
@@ -395,24 +393,35 @@ class AppSettingsController extends GetxController {
       SmartDialog.showToast('最多支持 2000 条屏蔽规则，请先移除不需要的规则');
       return false;
     }
-    addShieldList(value);
-    return true;
+    try {
+      await addShieldList(value);
+      return true;
+    } on FormatException catch (error) {
+      SmartDialog.showToast(error.message.toString());
+      return false;
+    } catch (_, stack) {
+      Log.e('保存屏蔽规则失败', stack);
+      SmartDialog.showToast('保存失败，请重试');
+      return false;
+    }
   }
 
-  void addShieldList(String e) {
-    shieldList.add(e);
-    LocalStorageService.instance.shieldBox.put(e, e);
+  Future<void> importShieldRules(Iterable<dynamic> data,
+      {required bool replace}) async {
+    final next = await LocalStorageService.instance.updateShieldRules(
+        data, replace: replace);
+    shieldList.assignAll(next);
   }
 
-  void removeShieldList(String e) {
-    shieldList.remove(e);
-    LocalStorageService.instance.shieldBox.delete(e);
+  Future<void> addShieldList(String e) => importShieldRules([e], replace: false);
+
+  Future<void> removeShieldList(String e) async {
+    final next = await LocalStorageService.instance.updateShieldRules(
+        const [], replace: false, remove: e);
+    shieldList.assignAll(next);
   }
 
-  Future clearShieldList() async {
-    shieldList.clear();
-    await LocalStorageService.instance.shieldBox.clear();
-  }
+  Future<void> clearShieldList() => importShieldRules(const [], replace: true);
 
   void setScaleMode(int value) {
     scaleMode.value = value;

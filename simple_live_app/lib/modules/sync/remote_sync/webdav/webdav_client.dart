@@ -7,22 +7,9 @@ class DAVClient {
   late Client client;
   Completer<bool> pingCompleter = Completer();
 
-  DAVClient(
-      String webDAVUri,
-      String webDAVUser,
-      String webDAVPassword,
-      ) {
-    client = newClient(
-      webDAVUri,
-      user: webDAVUser,
-      password: webDAVPassword,
-    );
-    client.setHeaders(
-      {
-        'accept-charset': 'utf-8',
-        'Content-Type': 'text/xml',
-      },
-    );
+  DAVClient(String webDAVUri, String webDAVUser, String webDAVPassword) {
+    client = newClient(webDAVUri, user: webDAVUser, password: webDAVPassword);
+    client.setHeaders({'accept-charset': 'utf-8', 'Content-Type': 'text/xml'});
     client.setConnectTimeout(8000);
     client.setSendTimeout(8000);
     client.setReceiveTimeout(8000);
@@ -37,15 +24,29 @@ class DAVClient {
       return false;
     }
   }
+
   // 强制统一
   get root => "/simple_live_app";
 
   get backupFile => "$root/backup.zip";
 
-  backup(Uint8List data) async {
+  Future<bool> backup(Uint8List data) async {
     await client.mkdir("$root");
-    await client.write("$backupFile", data);
-    return true;
+    final temporary =
+        '$root/backup-${DateTime.now().microsecondsSinceEpoch}.tmp';
+    try {
+      await client.write(temporary, data);
+      // WebDAV MOVE replaces the published object only after upload succeeds.
+      // Servers without MOVE fail safely and retain the previous backup.
+      await client.rename(temporary, backupFile, true);
+      return true;
+    } finally {
+      try {
+        await client.remove(temporary);
+      } catch (_) {
+        // MOVE already removed the source, or the connection is unavailable.
+      }
+    }
   }
 
   Future<List<int>> recovery() async {

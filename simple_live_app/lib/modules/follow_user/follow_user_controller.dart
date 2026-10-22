@@ -122,8 +122,7 @@ class FollowUserController extends BasePageController<FollowUser> {
     if (!notificationUpdates.add(item.id)) return;
     try {
       final enabled = await LiveNotificationService.instance.toggle(item);
-      filterData();
-      list.refresh();
+      await FollowService.instance.loadData(updateStatus: false);
       SmartDialog.showToast(enabled ? '已开启开播提醒' : '已关闭开播提醒');
     } catch (error, stackTrace) {
       Log.e('更新开播提醒失败: $error', stackTrace);
@@ -142,19 +141,8 @@ class FollowUserController extends BasePageController<FollowUser> {
     if (!result) {
       return;
     }
-    // 取消关注同时删除标签内的 userId
-    if (item.tag != "全部") {
-      var tag = tagList.firstWhere((tag) => tag.tag == item.tag);
-      tag.userId.remove(item.id);
-      try {
-        await updateTag(tag);
-      } catch (error) {
-        SmartDialog.showToast("标签更新失败，请重试");
-        return;
-      }
-    }
-    await DBService.instance.followBox.delete(item.id);
-    refreshData();
+    await DBService.instance.deleteFollow(item.id);
+    await refreshData();
   }
 
   Future<void> updateItem(FollowUser item) =>
@@ -162,26 +150,12 @@ class FollowUserController extends BasePageController<FollowUser> {
 
   // 修改item的标签
   Future<void> setItemTag(FollowUser item, FollowUserTag targetTag) async {
-    FollowUserTag tarTag = targetTag;
-    if (tarTag.tag != '全部' && !DBService.instance.getFollowTagExist(tarTag.id)) {
-      return;
-    }
-    FollowUserTag curTag = tagList.firstWhere((tag) => tag.tag == item.tag);
-    // 从当前标签（非全部）删除item 向目标标签(全部包含所有item == 非全部)添加item
-    curTag.userId.remove(item.id);
-    tarTag.userId.addIf(!tarTag.userId.contains(item.id), item.id);
-    // 数据库更新
     try {
-      await updateTag(curTag);
-      await updateTag(tarTag);
-      final currentTargets = DBService.instance.getFollowTagList().where(
-        (tag) => tag.id == tarTag.id,
+      await DBService.instance.moveFollow(
+        item.id,
+        targetTag.tag == '全部' ? null : targetTag.id,
       );
-      item.tag = tarTag.tag == '全部' || currentTargets.isEmpty
-          ? '全部'
-          : currentTargets.first.tag;
-      await updateItem(item);
-      filterData();
+      await FollowService.instance.loadData(updateStatus: false);
     } catch (error) {
       SmartDialog.showToast("标签更新失败，请重试");
     }
@@ -189,17 +163,9 @@ class FollowUserController extends BasePageController<FollowUser> {
 
   Future<void> removeTag(FollowUserTag tag) async {
     try {
-      // 将tag下的所有follow设置为全部
-      for (var i in tag.userId) {
-        var follow = DBService.instance.followBox.get(i);
-        if (follow != null) {
-          follow.tag = "全部";
-          await updateItem(follow);
-        }
-      }
       await FollowService.instance.delFollowUserTag(tag);
+      await FollowService.instance.loadData(updateStatus: false);
       updateTagList();
-      Log.i('删除tag${tag.tag}');
     } catch (error) {
       SmartDialog.showToast("标签删除失败，请重试");
     }
@@ -236,16 +202,9 @@ class FollowUserController extends BasePageController<FollowUser> {
     }
     final FollowUserTag newTag = followUserTag.copyWith(tag: newTagName);
     try {
-      await updateTag(newTag);
+      await DBService.instance.renameFollowTag(newTag.id, newTag.tag);
       if (!DBService.instance.getFollowTagExist(newTag.id)) return;
-      // update item's tag when update tagName
-      for (var i in newTag.userId) {
-        var follow = DBService.instance.followBox.get(i);
-        if (follow != null) {
-          follow.tag = newTagName;
-          await updateItem(follow);
-        }
-      }
+      await FollowService.instance.loadData(updateStatus: false);
       SmartDialog.showToast("标签名修改成功");
       updateTagList();
     } catch (error) {

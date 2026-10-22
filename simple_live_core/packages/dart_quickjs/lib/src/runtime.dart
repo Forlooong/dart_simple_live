@@ -4,6 +4,7 @@
 
 import 'dart:convert';
 import 'dart:ffi';
+import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 
@@ -30,6 +31,8 @@ class JsRuntime {
 
   /// Whether the runtime has been disposed.
   bool _disposed = false;
+  Pointer<Void> _deadline = nullptr;
+  final int? maxStringBytes;
 
   /// Default stack size: 512KB (conservative for mobile devices)
   static const int _defaultStackSize = 512 * 1024;
@@ -44,7 +47,11 @@ class JsRuntime {
   ///
   /// For devices with limited resources (e.g., Android TV boxes), consider using
   /// smaller values to prevent crashes.
-  JsRuntime({int? memoryLimit, int? maxStackSize}) {
+  JsRuntime({int? memoryLimit, int? maxStackSize, Duration? executionTimeout,
+    this.maxStringBytes}) {
+    if (executionTimeout != null && executionTimeout <= Duration.zero) {
+      throw ArgumentError.value(executionTimeout, 'executionTimeout');
+    }
     _runtime = JS_NewRuntime();
     if (_runtime == nullptr) {
       throw JsException('Failed to create JavaScript runtime');
@@ -66,6 +73,14 @@ class JsRuntime {
     if (_context == nullptr) {
       JS_FreeRuntime(_runtime);
       throw JsException('Failed to create JavaScript context');
+    }
+    if (executionTimeout != null) {
+      _deadline = sl_runtime_deadline(_runtime, executionTimeout.inMilliseconds);
+      if (_deadline == nullptr) {
+        JS_FreeContext(_context);
+        JS_FreeRuntime(_runtime);
+        throw JsException('Failed to create execution deadline');
+      }
     }
   }
 
@@ -104,7 +119,7 @@ class JsRuntime {
       final result = JS_Eval(
         _context,
         codePtr,
-        code.length,
+        utf8.encode(code).length,
         filenamePtr,
         flags,
       );
@@ -135,7 +150,7 @@ class JsRuntime {
       final result = JS_Eval(
         _context,
         codePtr,
-        code.length,
+        utf8.encode(code).length,
         filenamePtr,
         JsEvalFlags.typeGlobal,
       );
@@ -171,21 +186,17 @@ class JsRuntime {
 
     final argc = args?.length ?? 0;
     Pointer<JSValue>? argv;
-
-    // Prepare arguments
-    if (argc > 0) {
-      argv = calloc<JSValue>(argc);
-      for (var i = 0; i < argc; i++) {
-        argv[i] = _dartToJsValue(args![i]);
-      }
-    }
-
-    // Prepare 'this' value
-    final thisVal = thisArg != null
-        ? _dartToJsValue(thisArg)
-        : _createUndefined();
+    var prepared = 0;
+    var thisVal = _createUndefined();
 
     try {
+      if (argc > 0) {
+        argv = calloc<JSValue>(argc);
+        for (; prepared < argc; prepared++) {
+          argv[prepared] = _dartToJsValue(args![prepared]);
+        }
+      }
+      if (thisArg != null) thisVal = _dartToJsValue(thisArg);
       final result = JS_Call(
         _context,
         function._value,
@@ -198,7 +209,7 @@ class JsRuntime {
     } finally {
       // Free arguments
       if (argv != null) {
-        for (var i = 0; i < argc; i++) {
+        for (var i = 0; i < prepared; i++) {
           if (argv[i].hasRefCount) {
             JS_FreeValue(_context, argv[i]);
           }
@@ -242,9 +253,9 @@ class JsRuntime {
 
     final globalObj = JS_GetGlobalObject(_context);
     final namePtr = name.toNativeUtf8();
-    final jsValue = _dartToJsValue(value);
 
     try {
+      final jsValue = _dartToJsValue(value);
       final result = JS_SetPropertyStr(_context, globalObj, namePtr, jsValue);
       if (result < 0) {
         _throwJsException();
@@ -292,6 +303,10 @@ class JsRuntime {
     if (_disposed) return;
 
     _disposed = true;
+    JS_UpdateStackTop(_runtime);
+    if (_deadline != nullptr) {
+      sl_runtime_clear_deadline(_runtime, _deadline);
+    }
     JS_FreeContext(_context);
     JS_FreeRuntime(_runtime);
   }
@@ -304,6 +319,7 @@ class JsRuntime {
     if (_disposed) {
       throw const JsRuntimeDisposedException();
     }
+    JS_UpdateStackTop(_runtime);
   }
 
   /// Converts a JSValue to a Dart value.
@@ -338,6 +354,9 @@ class JsRuntime {
             throw JsException('Failed to convert string');
           }
           try {
+            if (maxStringBytes != null && plen.value > maxStringBytes!) {
+              throw JsException('JavaScript string exceeds output limit');
+            }
             return cstr.toDartString(length: plen.value);
           } finally {
             calloc.free(plen);
@@ -416,11 +435,11 @@ class JsRuntime {
     );
 
     if (json.isException || json.isUndefined) {
-      // If JSON.stringify fails (e.g., circular reference), return an empty map
       if (json.hasRefCount) {
         JS_FreeValue(_context, json);
       }
-      return {};
+      if (json.isException) _throwJsException();
+      throw JsException('Object cannot be represented as JSON');
     }
 
     final plen = calloc<Size>();
@@ -428,11 +447,12 @@ class JsRuntime {
 
     try {
       if (cstr == nullptr) {
-        return {};
+        throw JsException('Failed to convert object');
+      }
+      if (maxStringBytes != null && plen.value > maxStringBytes!) {
+        throw JsException('JavaScript object exceeds output limit');
       }
       final jsonStr = cstr.toDartString(length: plen.value);
-      JS_FreeCString(_context, cstr);
-      JS_FreeValue(_context, json);
 
       // Parse the JSON string using Dart's JSON decoder
       final parseResult = jsonDecode(jsonStr);
@@ -441,6 +461,8 @@ class JsRuntime {
       }
       return {};
     } finally {
+      if (cstr != nullptr) JS_FreeCString(_context, cstr);
+      JS_FreeValue(_context, json);
       calloc.free(plen);
     }
   }
@@ -465,30 +487,46 @@ class JsRuntime {
 
     if (value is String) {
       final ptr = value.toNativeUtf8();
-      final result = JS_NewStringLen(_context, ptr, value.length);
-      calloc.free(ptr);
-      return result;
+      try {
+        return JS_NewStringLen(_context, ptr, utf8.encode(value).length);
+      } finally {
+        calloc.free(ptr);
+      }
     }
 
     if (value is List) {
       final arr = JS_NewArray(_context);
-      for (var i = 0; i < value.length; i++) {
-        final elem = _dartToJsValue(value[i]);
-        JS_SetPropertyUint32(_context, arr, i, elem);
+      if (arr.isException) _throwJsException();
+      try {
+        for (var i = 0; i < value.length; i++) {
+          final elem = _dartToJsValue(value[i]);
+          if (JS_SetPropertyUint32(_context, arr, i, elem) < 0) _throwJsException();
+        }
+        return arr;
+      } catch (_) {
+        JS_FreeValue(_context, arr);
+        rethrow;
       }
-      return arr;
     }
 
     if (value is Map) {
       final obj = JS_NewObject(_context);
-      for (final entry in value.entries) {
-        final keyStr = entry.key.toString();
-        final keyPtr = keyStr.toNativeUtf8();
-        final val = _dartToJsValue(entry.value);
-        JS_SetPropertyStr(_context, obj, keyPtr, val);
-        calloc.free(keyPtr);
+      if (obj.isException) _throwJsException();
+      try {
+        for (final entry in value.entries) {
+          final keyPtr = entry.key.toString().toNativeUtf8();
+          try {
+            final val = _dartToJsValue(entry.value);
+            if (JS_SetPropertyStr(_context, obj, keyPtr, val) < 0) _throwJsException();
+          } finally {
+            calloc.free(keyPtr);
+          }
+        }
+        return obj;
+      } catch (_) {
+        JS_FreeValue(_context, obj);
+        rethrow;
       }
-      return obj;
     }
 
     if (value is JsFunction) {
@@ -504,53 +542,30 @@ class JsRuntime {
     );
   }
 
-  /// Creates a null JSValue.
-  JSValue _createNull() {
-    final v = calloc<JSValue>();
-    v.ref.tag = JsTag.null_;
-    v.ref.u = 0;
-    final result = v.ref;
-    calloc.free(v);
-    return result;
-  }
+  // JSValue structs must own Dart memory; Pointer.ref would become dangling
+  // immediately after freeing its allocation, before the following FFI call.
+  JSValue _createNull() => Struct.create<JSValue>()..tag = JsTag.null_;
 
-  /// Creates an undefined JSValue.
-  JSValue _createUndefined() {
-    final v = calloc<JSValue>();
-    v.ref.tag = JsTag.undefined;
-    v.ref.u = 0;
-    final result = v.ref;
-    calloc.free(v);
-    return result;
-  }
+  JSValue _createUndefined() => Struct.create<JSValue>()..tag = JsTag.undefined;
 
-  /// Creates a boolean JSValue.
-  JSValue _createBool(bool value) {
-    final v = calloc<JSValue>();
-    v.ref.tag = JsTag.bool_;
-    v.ref.u = value ? 1 : 0;
-    final result = v.ref;
-    calloc.free(v);
-    return result;
-  }
+  JSValue _createBool(bool value) => Struct.create<JSValue>()
+    ..tag = JsTag.bool_
+    ..u = value ? 1 : 0;
 
-  /// Creates a number JSValue.
   JSValue _createNumber(double value) {
-    final v = calloc<JSValue>();
-    v.ref.tag = JsTag.float64;
-    // Store the double bits in the union field
-    final bytes = calloc<Double>();
-    bytes.value = value;
-    v.ref.u = bytes.cast<Int64>().value;
-    calloc.free(bytes);
-    final result = v.ref;
-    calloc.free(v);
-    return result;
+    final bits = ByteData(8)..setFloat64(0, value, Endian.host);
+    return Struct.create<JSValue>()
+      ..tag = JsTag.float64
+      ..u = bits.getInt64(0, Endian.host);
   }
 
   /// Throws a JsException with the current exception from the context.
   Never _throwJsException() {
     final exception = JS_GetException(_context);
+    if (sl_runtime_timed_out(_deadline) != 0) {
+      JS_FreeValue(_context, exception);
+      throw const JsExecutionTimeoutException();
+    }
 
     String message = 'Unknown error';
     String? stack;
@@ -624,6 +639,7 @@ class JsFunction {
     if (_disposed) return;
     _disposed = true;
     if (!_runtime.isDisposed) {
+      _runtime._checkDisposed();
       JS_FreeValue(_runtime._context, _value);
     }
   }

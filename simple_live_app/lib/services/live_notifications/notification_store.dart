@@ -1,3 +1,4 @@
+import 'package:simple_live_app/services/local_storage_service.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -34,9 +35,25 @@ class FileNotificationStore implements NotificationStore {
   @override
   Future<NotificationConfig> readConfig() async {
     final json = await _read('subscriptions');
-    return json.isEmpty
-        ? const NotificationConfig()
-        : NotificationConfig.fromJson(json);
+    if (json.isEmpty) return const NotificationConfig();
+    final parsed = NotificationConfig.fromJson(json);
+    // Workers read the same platform vault as the foreground process. Cookies
+    // never travel through the ordinary subscription JSON (including legacy JSON).
+    return NotificationConfig(
+      rooms: parsed.rooms,
+      bilibiliCookie: parsed.rooms.any((room) => room.siteId == 'bilibili')
+          ? await LocalStorageService.secureStorage.read(
+                  key: LocalStorageService.kBilibiliCookie,
+                ) ??
+                ''
+          : '',
+      douyinCookie: parsed.rooms.any((room) => room.siteId == 'douyin')
+          ? await LocalStorageService.secureStorage.read(
+                  key: LocalStorageService.kDouyinCookie,
+                ) ??
+                ''
+          : '',
+    );
   }
 
   Future<void> writeConfig(NotificationConfig config) =>

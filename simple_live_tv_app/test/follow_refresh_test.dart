@@ -14,6 +14,8 @@ import 'package:simple_live_tv_app/services/follow_user_service.dart';
 
 class _Settings extends AppSettingsController {
   @override
+  // Keep plugin-backed settings initialization out of the fixture.
+  // ignore: must_call_super
   void onInit() {}
 }
 
@@ -79,48 +81,101 @@ void main() {
   Future<void> finishRound() async {
     while (service.updating.value) {
       for (final request in site.requests) {
-        if (!request.isCompleted)
+        if (!request.isCompleted) {
           request.complete(const LiveRoomStatus(live: true));
+        }
       }
       await Future<void>.delayed(Duration.zero);
     }
   }
 
-  test('TV refresh is single flight and playback admits only two requests',
-      () async {
-    service.beginWatching();
-    final round = service.refreshData();
-    expect(
-        List.generate(20, (_) => service.refreshData())
-            .every((other) => identical(round, other)),
-        isTrue);
-    expect(site.requests, hasLength(2));
-    expect(service.list, hasLength(12));
-    await finishRound();
-    await round;
-    expect(site.requests, hasLength(12));
-    expect(service.livingList, hasLength(12));
-    expect(service.updatedCount, 12);
-    service.endWatching();
-  });
+  test(
+    'TV refresh is single flight and playback admits only two requests',
+    () async {
+      service.beginWatching();
+      final round = service.refreshData();
+      expect(
+        List.generate(
+          20,
+          (_) => service.refreshData(),
+        ).every((other) => identical(round, other)),
+        isTrue,
+      );
+      expect(site.requests, hasLength(2));
+      expect(service.list, hasLength(12));
+      await finishRound();
+      await round;
+      expect(site.requests, hasLength(12));
+      expect(service.livingList, hasLength(12));
+      expect(service.updatedCount, 12);
+      service.endWatching();
+    },
+  );
 
-  test('TV background drains and old account results cannot change the list',
-      () async {
+  test(
+    'manual refresh resumes all pending rooms with automatic polling off',
+    () async {
+      final round = service.refreshData();
+      expect(site.requests, hasLength(4));
+      service.didChangeAppLifecycleState(AppLifecycleState.paused);
+      for (final request in site.requests) {
+        request.complete(const LiveRoomStatus(live: true));
+      }
+      await Future<void>.delayed(Duration.zero);
+      expect(site.requests, hasLength(4));
+      service.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      await Future<void>.delayed(Duration.zero);
+      await finishRound();
+      await round;
+      expect(site.requests, hasLength(12));
+      expect(service.livingList, hasLength(12));
+    },
+  );
+  test(
+    'new and replaced members join the active worklist, removed results are ignored',
+    () async {
+      final round = service.refreshData();
+      final removed = rooms.first;
+      final replaced = rooms[5];
+      await database.followBox.delete(removed.id);
+      final replacement = FollowUser(
+        id: replaced.id,
+        roomId: replaced.roomId,
+        siteId: replaced.siteId,
+        userName: 'replacement',
+        face: '',
+        addTime: DateTime(2026),
+      );
+      final added = FollowUser(
+        id: 'test_new',
+        roomId: 'new',
+        siteId: 'test',
+        userName: 'new',
+        face: '',
+        addTime: DateTime(2026),
+      );
+      await database.followBox.put(replacement.id, replacement);
+      await database.followBox.put(added.id, added);
+      expect(identical(round, service.refreshData()), isTrue);
+      await finishRound();
+      await round;
+      expect(removed.liveStatus.value, 0);
+      expect(replaced.liveStatus.value, 0);
+      expect(replacement.liveStatus.value, 2);
+      expect(added.liveStatus.value, 2);
+      expect(service.livingList, hasLength(12));
+    },
+  );
+
+  test('account changes and close reject in-flight results', () async {
     final round = service.refreshData();
-    expect(site.requests, hasLength(4));
-    service.didChangeAppLifecycleState(AppLifecycleState.paused);
     site.invalidateStatusCache();
-    await database.followBox.delete(rooms.first.id);
-    await finishRound();
+    service.onClose();
+    for (final request in site.requests) {
+      request.complete(const LiveRoomStatus(live: true));
+    }
     await round;
     expect(site.requests, hasLength(4));
-    expect(service.livingList, isEmpty);
     expect(rooms.every((room) => room.liveStatus.value == 0), isTrue);
-    service.didChangeAppLifecycleState(AppLifecycleState.resumed);
-    final next = service.refreshData();
-    await finishRound();
-    await next;
-    expect(service.list, hasLength(11));
-    expect(service.livingList, hasLength(11));
   });
 }

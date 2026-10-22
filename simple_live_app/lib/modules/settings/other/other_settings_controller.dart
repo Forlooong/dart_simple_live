@@ -1,5 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:simple_live_core/simple_live_core.dart'
+    show validateShieldRules;
 import 'package:flutter/foundation.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
@@ -50,7 +52,7 @@ class OtherSettingsController extends BaseController {
     "sdl": "sdl (Cross-platform, via SDL library)",
     "openal": "openal (Cross-platform, OpenAL backend)",
     "libao": "libao (Cross-platform, uses libao library)",
-    "auto": "auto (Not available)"
+    "auto": "auto (Not available)",
   };
 
   var hardwareDecoder = {
@@ -80,7 +82,7 @@ class OtherSettingsController extends BaseController {
     "cuda": "cuda",
     "cuda-copy": "cuda-copy",
     "crystalhd": "crystalhd",
-    "rkmpp": "rkmpp"
+    "rkmpp": "rkmpp",
   };
 
   @override
@@ -134,9 +136,7 @@ class OtherSettingsController extends BaseController {
   }
 
   void shareLogFile(LogFileModel item) {
-    SharePlus.instance.share(ShareParams(
-      files: [XFile(item.path)],
-    ));
+    SharePlus.instance.share(ShareParams(files: [XFile(item.path)]));
   }
 
   void saveLogFile(LogFileModel item) async {
@@ -153,87 +153,155 @@ class OtherSettingsController extends BaseController {
     }
   }
 
-  void exportConfig() async {
+  bool _configBusy = false;
+
+  Map<String, dynamic> configurationSnapshot() => {
+    'type': 'simple_live',
+    'platform': Platform.operatingSystem,
+    'version': 2,
+    'time': DateTime.now().millisecondsSinceEpoch,
+    'config': LocalStorageService.instance.exportSettings(),
+    'shield': LocalStorageService.instance.shieldBox.values.toList(),
+  };
+
+  static ({Map<String, dynamic> settings, List<String> rules})
+  validateConfiguration(dynamic data) {
+    if (data is! Map ||
+        data['type'] != 'simple_live' ||
+        !const [1, 2].contains(data['version']) ||
+        data['platform'] is! String ||
+        data['config'] is! Map ||
+        (data['shield'] is! List && data['shield'] is! Map)) {
+      throw const FormatException('不支持的配置文件');
+    }
+    // Validate both sections before either enters a persistent write queue.
+    final settings = LocalStorageService.validateSettings(data['config']);
+    final rawRules = data['shield'];
+    final rules = validateShieldRules(
+      rawRules is Map ? rawRules.values : rawRules as List,
+    );
+    return (settings: settings, rules: rules);
+  }
+
+  Future<({List<String> succeeded, List<String> failed})> restoreConfiguration(
+    dynamic data,
+  ) async => _applyConfiguration(validateConfiguration(data));
+
+  Future<({List<String> succeeded, List<String> failed})> _applyConfiguration(
+    ({Map<String, dynamic> settings, List<String> rules}) input,
+  ) async {
+    final succeeded = <String>[];
+    final failed = <String>[];
     try {
-      // 组装数据
-      var data = {
-        "type": "simple_live",
-        "platform": Platform.operatingSystem,
-        "version": 1,
-        "time": DateTime.now().millisecondsSinceEpoch,
-        "config": LocalStorageService.instance.settingsBox.toMap(),
-        "shield": LocalStorageService.instance.shieldBox.toMap(),
-      };
+      await LocalStorageService.instance.restoreSettings(
+        input.settings,
+        replace: true,
+      );
+      AppSettingsController.instance.reloadSettings();
+      succeeded.add('常规偏好');
+    } catch (_, stack) {
+      failed.add('常规偏好');
+      Log.e('恢复常规偏好失败', stack);
+    }
+    try {
+      await AppSettingsController.instance.importShieldRules(
+        input.rules,
+        replace: true,
+      );
+      succeeded.add('屏蔽词');
+    } catch (_, stack) {
+      failed.add('屏蔽词');
+      Log.e('恢复屏蔽词失败', stack);
+    }
+    return (succeeded: succeeded, failed: failed);
+  }
 
-      var bytes = Uint8List.fromList(utf8.encode(jsonEncode(data)));
+  void _showConfigResult(
+    String action,
+    ({List<String> succeeded, List<String> failed}) result,
+  ) {
+    if (result.failed.isEmpty) {
+      SmartDialog.showToast('$action成功，已应用');
+    } else if (result.succeeded.isEmpty) {
+      SmartDialog.showToast('$action未完成，请重试');
+    } else {
+      SmartDialog.showToast(
+        '已完成：${result.succeeded.join('、')}；'
+        '未完成：${result.failed.join('、')}，请重试',
+      );
+    }
+  }
 
-      // FilePicker 直接写入
-      var inlineSave = Platform.isAndroid || Platform.isIOS || kIsWeb;
-
-      var path = await FilePicker.platform.saveFile(
+  Future<void> exportConfig() async {
+    if (_configBusy) return;
+    _configBusy = true;
+    try {
+      final bytes = Uint8List.fromList(
+        utf8.encode(jsonEncode(configurationSnapshot())),
+      );
+      final inlineSave = Platform.isAndroid || Platform.isIOS || kIsWeb;
+      final path = await FilePicker.platform.saveFile(
         allowedExtensions: ['json'],
         type: FileType.custom,
-        fileName: "simple_live_config.json",
+        fileName: 'simple_live_config.json',
         bytes: inlineSave ? bytes : null,
       );
-
-      if (path == null && !kIsWeb) {
-        SmartDialog.showToast("保存取消");
-        return;
-      }
-
-      // 桌面平台需要手动写入
-      if (!inlineSave && path != null) {
-        await File(path).writeAsBytes(bytes);
-      }
-
-      SmartDialog.showToast("保存成功");
-    } catch (e) {
-      Log.logPrint(e);
-      SmartDialog.showToast("导出失败:$e");
+      if (path == null && !kIsWeb) return;
+      if (!inlineSave && path != null) await File(path).writeAsBytes(bytes);
+      SmartDialog.showToast('保存成功');
+    } catch (_, stack) {
+      Log.e('导出配置失败', stack);
+      SmartDialog.showToast('导出失败，请检查保存位置后重试');
+    } finally {
+      _configBusy = false;
     }
   }
 
-  void importConfig() async {
+  Future<void> importConfig() async {
+    if (_configBusy) return;
+    _configBusy = true;
     try {
-      var file = await FilePicker.platform.pickFiles(
+      final selection = await FilePicker.platform.pickFiles(
         allowedExtensions: ['json'],
         type: FileType.custom,
       );
-      if (file == null) {
+      if (selection == null) return;
+      final file = File(selection.files.single.path!);
+      if (await file.length() > 8 * 1024 * 1024) {
+        throw const FormatException('配置文件过大');
+      }
+      final data = jsonDecode(await file.readAsString());
+      final input = validateConfiguration(data);
+      if (data['platform'] != Platform.operatingSystem &&
+          !await Utils.showAlertDialog('配置文件的平台不同，是否继续导入？', title: '平台不匹配')) {
         return;
       }
-      var filePath = file.files.single.path!;
-      var data = jsonDecode(await File(filePath).readAsString());
-      if (data["type"] != "simple_live") {
-        SmartDialog.showToast("不支持的配置文件");
-        return;
-      }
-      // 检查platform
-      if (data["platform"] != Platform.operatingSystem &&
-          !await Utils.showAlertDialog("导入配置文件平台不匹配,是否继续导入?", title: "平台不匹配")) {
-        return;
-      }
-      LocalStorageService.instance.settingsBox.clear();
-      LocalStorageService.instance.shieldBox.clear();
-      LocalStorageService.instance.settingsBox.putAll(data["config"]);
-      LocalStorageService.instance.shieldBox
-          .putAll(data["shield"].cast<String, String>());
-      SmartDialog.showToast("导入成功,重启生效");
-    } catch (e) {
-      Log.logPrint(e);
-      SmartDialog.showToast("导入失败:$e");
+      _showConfigResult('导入', await _applyConfiguration(input));
+    } catch (_, stack) {
+      Log.e('导入配置失败', stack);
+      SmartDialog.showToast('导入失败，请检查配置文件后重试');
+    } finally {
+      _configBusy = false;
     }
   }
 
-  void resetDefaultConfig() {
-    Utils.showAlertDialog("是否重置所有配置为默认值?").then((value) {
-      if (value) {
-        LocalStorageService.instance.settingsBox.clear();
-        LocalStorageService.instance.shieldBox.clear();
-        SmartDialog.showToast("重置成功,重启生效");
+  Future<void> resetDefaultConfig() async {
+    if (_configBusy) return;
+    _configBusy = true;
+    try {
+      if (!await Utils.showAlertDialog('是否重置常规偏好和屏蔽词？账号、同步配置和日志开关会保留。')) {
+        return;
       }
-    });
+      _showConfigResult(
+        '重置',
+        await _applyConfiguration((settings: {}, rules: [])),
+      );
+    } catch (_, stack) {
+      Log.e('重置配置失败', stack);
+      SmartDialog.showToast('重置未完成，请重试');
+    } finally {
+      _configBusy = false;
+    }
   }
 }
 

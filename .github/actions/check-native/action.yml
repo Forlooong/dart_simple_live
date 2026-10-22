@@ -15,11 +15,13 @@ runs:
       shell: bash
       working-directory: simple_live_core
       run: |
-        dart pub get
-        dart test test/native_danmaku_test.dart test/native_danmaku_lifecycle_test.dart test/web_socket_lifecycle_test.dart test/status_refresh_test.dart test/room_status_snapshot_test.dart
+        dart pub get --enforce-lockfile
+        dart analyze --no-fatal-warnings lib
+        dart analyze --no-fatal-warnings test
+        dart test --exclude-tags network
     - name: Test idle and hidden renderer lifecycle
       shell: bash
       working-directory: packages/canvas_danmaku
       run: |
-        flutter pub get
+        flutter pub get --enforce-lockfile
         flutter test --no-pub test/lifecycle_test.dart

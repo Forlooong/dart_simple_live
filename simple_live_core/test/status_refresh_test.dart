@@ -67,7 +67,7 @@ void main() {
   );
 
   test(
-    'pause discards unstarted tasks and failure does not wedge next round',
+    'cancel discards unstarted tasks and failure does not wedge next round',
     () async {
       final queue = StatusRefreshQueue()..concurrency = 1;
       final gate = Completer<void>();
@@ -81,13 +81,44 @@ void main() {
         () async => calls++,
       ]);
       final failure = expectLater(round, throwsStateError);
-      queue.pause();
+      queue.cancel();
       gate.complete();
       await failure;
       expect(calls, 1);
       expect(queue.isRunning, isFalse);
       await queue.run([() async => calls++]);
       expect(calls, 2);
+    },
+  );
+
+  test(
+    'pause retains pending tasks, accepts new work, and resumes one round',
+    () async {
+      final queue = StatusRefreshQueue()..concurrency = 1;
+      final gate = Completer<void>();
+      final calls = <int>[];
+      final round = queue.run([
+        () async {
+          calls.add(1);
+          await gate.future;
+        },
+        () async {
+          calls.add(2);
+        },
+      ]);
+      queue.pause();
+      queue.add([
+        () async {
+          calls.add(3);
+        },
+      ]);
+      gate.complete();
+      await Future<void>.delayed(Duration.zero);
+      expect(calls, [1]);
+      expect(queue.isRunning, isTrue);
+      queue.resume();
+      await round;
+      expect(calls, [1, 2, 3]);
     },
   );
 

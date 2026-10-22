@@ -1,6 +1,9 @@
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:dio/dio.dart';
+import 'package:simple_live_core/src/common/playback_response.dart';
+
 import 'package:simple_live_core/src/common/live_status_parser.dart';
 
 import 'package:simple_live_core/simple_live_core.dart';
@@ -8,8 +11,6 @@ import 'package:simple_live_core/src/common/http_client.dart';
 import 'package:crypto/crypto.dart';
 import 'package:simple_live_core/src/model/tars/get_cdn_token_ex_req.dart';
 import 'package:simple_live_core/src/model/tars/get_cdn_token_ex_resp.dart';
-import 'package:simple_live_core/src/model/tars/get_cdn_token_req.dart';
-import 'package:simple_live_core/src/model/tars/get_cdn_token_resp.dart';
 import 'package:simple_live_core/src/model/tars/huya_user_id.dart';
 import 'package:tars_dart/tars/net/base_tars_http.dart';
 
@@ -21,7 +22,7 @@ class HuyaSite extends LiveSite {
   static const String HYSDK_UA =
       "HYSDK(Windows, 30000002)_APP(pc_exe&7060000&official)_SDK(trans&2.32.3.5646)";
 
-  static Map<String, String> requestHeaders =  {
+  static const Map<String, String> requestHeaders =  {
       'Origin': baseUrl,
       'Referer': baseUrl,
       'User-Agent': HYSDK_UA,
@@ -179,6 +180,7 @@ class HuyaSite extends LiveSite {
       // }
 
       qualities.add(LivePlayQuality(
+        id: item.bitRate.toString(),
         data: {
           "urls": urlData.lines,
           "bitRate": item.bitRate,
@@ -213,12 +215,13 @@ class HuyaSite extends LiveSite {
   Future<LivePlayUrl> getPlayUrls(
       {required LiveRoomDetail detail,
       required LivePlayQuality quality}) async {
-    var ls = <String>[];
-    for (var element in quality.data["urls"]) {
-      var line = element as HuyaLineModel;
-      var url = await getPlayUrl(line, quality.data["bitRate"]);
-      ls.add(url);
+    final data = playbackMap(quality.data, id);
+    final lines = playbackList(data['urls'], id);
+    if (data['bitRate'] is! int || lines.any((line) => line is! HuyaLineModel)) {
+      invalidPlayback(id);
     }
+    final ls = await collectPlaybackUrls<HuyaLineModel>(
+      lines.cast<HuyaLineModel>(), (line) => getPlayUrl(line, data['bitRate']), id);
     // 最新UA需要额外验证，此方法暂时弃用
     // var ua = await getHuYaUA();
     return LivePlayUrl(
@@ -252,9 +255,6 @@ class HuyaSite extends LiveSite {
 
     bool isWap = platformId == 103;
     var clacStartTime = DateTime.now().millisecondsSinceEpoch;
-
-    CoreLog.i(
-        "using $presenterUid | ctype-{$ctype} | platformId - {$platformId} | isWap - {$isWap} | $clacStartTime");
 
     var seqId = presenterUid + clacStartTime;
     final secretHash =
@@ -306,8 +306,15 @@ class HuyaSite extends LiveSite {
     var tReq = GetCdnTokenExReq();
     tReq.tId = tid;
     tReq.sStreamName = stream;
-    var resp = await tupClient.tupRequest(func, tReq, GetCdnTokenExResp());
-    return resp.sFlvToken;
+    try {
+      RequestContext.current?.check();
+      var resp = await tupClient.tupRequest(func, tReq, GetCdnTokenExResp(),
+          cancelToken: RequestContext.current?.cancelToken);
+      if (resp.sFlvToken.isEmpty) invalidPlayback(id);
+      return resp.sFlvToken;
+    } on DioException catch (error) {
+      throw CoreError.fromDio(error, site: id);
+    }
   }
 
   @override

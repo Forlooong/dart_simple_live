@@ -1,5 +1,7 @@
 library simple_live_core;
 
+export 'src/common/sync_session.dart';
+
 export 'src/interface/live_site.dart';
 export 'src/interface/live_danmaku.dart';
 export 'src/huya_site.dart';
@@ -23,3 +25,13 @@ export 'src/model/live_room_item.dart';
 export 'src/model/live_search_result.dart';
 export 'src/model/live_anchor_item.dart';
 export 'src/model/live_play_url.dart';
+
+export 'src/common/player_command_queue.dart';
+
+export 'src/common/playback_diagnostics.dart';
+
+export 'src/common/request_context.dart';
+
+export 'src/common/core_error.dart';
+
+export 'src/common/shield_rules.dart';

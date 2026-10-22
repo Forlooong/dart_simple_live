@@ -12,10 +12,8 @@ import 'package:simple_live_app/app/controller/base_controller.dart';
 import 'package:simple_live_app/app/event_bus.dart';
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/utils.dart';
-import 'package:simple_live_app/models/db/history.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/db_service.dart';
-import 'package:simple_live_app/services/follow_import.dart';
 import 'package:simple_live_app/services/signalr_service.dart';
 
 class RemoteSyncRoomController extends BaseController {
@@ -102,11 +100,11 @@ class RemoteSyncRoomController extends BaseController {
       SmartDialog.showToast("房间已被销毁");
       Get.back();
     });
-    _roomUserUpdatedSubscription = signalR.onRoomUserUpdatedStream.listen(
-      (roomUsers) {
-        this.roomUsers.assignAll(roomUsers);
-      },
-    );
+    _roomUserUpdatedSubscription = signalR.onRoomUserUpdatedStream.listen((
+      roomUsers,
+    ) {
+      this.roomUsers.assignAll(roomUsers);
+    });
     _onFavoriteSubscription = signalR.onFavoriteStream.listen((data) {
       onReceiveFavorite(data.$1, data.$2);
     });
@@ -123,12 +121,8 @@ class RemoteSyncRoomController extends BaseController {
 
   void onReceiveFavorite(bool overlay, String data) async {
     try {
-      var jsonBody = json.decode(data);
-      await importFollowUsers(
-        DBService.instance.followBox,
-        jsonBody,
-        replace: overlay,
-      );
+      final jsonBody = json.decode(data) as List;
+      await DBService.instance.importFollows(jsonBody, replace: overlay);
       SmartDialog.showToast('已同步关注用户列表');
       EventBus.instance.emit(Constant.kUpdateFollow, 0);
       SmartDialog.showToast("已同步关注列表");
@@ -140,21 +134,8 @@ class RemoteSyncRoomController extends BaseController {
 
   void onReceiveHistory(bool overlay, String data) async {
     try {
-      var jsonBody = json.decode(data);
-      if (overlay) {
-        await DBService.instance.historyBox.clear();
-      }
-      for (var item in jsonBody) {
-        var history = History.fromJson(item);
-        if (DBService.instance.historyBox.containsKey(history.id)) {
-          var old = DBService.instance.historyBox.get(history.id);
-          //如果本地的更新时间比较新，就不更新
-          if (old!.updateTime.isAfter(history.updateTime)) {
-            continue;
-          }
-        }
-        await DBService.instance.addOrUpdateHistory(history);
-      }
+      final jsonBody = json.decode(data) as List;
+      await DBService.instance.importHistories(jsonBody, replace: overlay);
       SmartDialog.showToast('已同步历史记录');
       EventBus.instance.emit(Constant.kUpdateHistory, 0);
     } catch (e) {
@@ -165,14 +146,9 @@ class RemoteSyncRoomController extends BaseController {
 
   void onReceiveShieldWord(bool overlay, String data) async {
     try {
-      var jsonBody = json.decode(data);
-      if (overlay) {
-        AppSettingsController.instance.clearShieldList();
-      }
-      for (var item in jsonBody) {
-        // add to Hive
-        AppSettingsController.instance.addShieldList(item);
-      }
+      final jsonBody = json.decode(data) as List;
+      await AppSettingsController.instance.importShieldRules(
+          jsonBody, replace: overlay);
       SmartDialog.showToast('已同步屏蔽词');
     } catch (e) {
       SmartDialog.showToast("同步失败:$e");
@@ -184,8 +160,8 @@ class RemoteSyncRoomController extends BaseController {
     try {
       var jsonBody = json.decode(data);
       var cookie = jsonBody['cookie'];
-      BiliBiliAccountService.instance.setCookie(cookie);
-      BiliBiliAccountService.instance.loadUserInfo();
+      await BiliBiliAccountService.instance.setCookie(cookie);
+      await BiliBiliAccountService.instance.loadUserInfo();
       SmartDialog.showToast('已同步哔哩哔哩账号');
     } catch (e) {
       SmartDialog.showToast("同步失败:$e");

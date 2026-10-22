@@ -19,8 +19,26 @@ class StatusRefreshQueue {
   void Function()? _pump;
   Queue<Future<void> Function()>? _pending;
 
-  void pause() {
+  bool _paused = false;
+
+  /// Stop admission while retaining the current round's unstarted tasks.
+  void pause() => _paused = true;
+
+  void resume() {
+    _paused = false;
+    _pump?.call();
+  }
+
+  /// Discard unstarted tasks; already admitted requests still drain.
+  void cancel() {
     _pending?.clear();
+    _paused = false;
+    _pump?.call();
+  }
+
+  /// Append members discovered during an active refresh.
+  void add(Iterable<Future<void> Function()> tasks) {
+    _pending?.addAll(tasks);
     _pump?.call();
   }
 
@@ -34,7 +52,7 @@ class StatusRefreshQueue {
     Object? firstError;
     StackTrace? firstStack;
     void pump() {
-      while (active < _concurrency && pending.isNotEmpty) {
+      while (!_paused && active < _concurrency && pending.isNotEmpty) {
         final task = pending.removeFirst();
         active++;
         Future<void>.sync(task)

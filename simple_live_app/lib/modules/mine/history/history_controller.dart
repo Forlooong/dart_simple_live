@@ -17,12 +17,12 @@ class HistoryController extends BasePageController<History> {
     if (!result) {
       return;
     }
-    await DBService.instance.historyBox.clear();
+    await DBService.instance.clearHistories();
     refreshData();
   }
 
   void removeItem(History item) async {
-    await DBService.instance.historyBox.delete(item.id);
+    await DBService.instance.deleteHistory(item.id);
     refreshData();
   }
 }

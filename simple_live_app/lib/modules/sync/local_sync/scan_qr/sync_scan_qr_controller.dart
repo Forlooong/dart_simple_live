@@ -5,7 +5,6 @@ import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:qr_code_scanner_plus/qr_code_scanner_plus.dart';
 import 'package:simple_live_app/app/controller/base_controller.dart';
-import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/routes/route_path.dart';
 
@@ -18,7 +17,6 @@ class SyncScanQRControlelr extends BaseController {
     qrController = controller;
     barcodeStreamSubscription =
         qrController!.scannedDataStream.listen((scanData) async {
-      Log.d(scanData.toString());
       if (pause) {
         return;
       }

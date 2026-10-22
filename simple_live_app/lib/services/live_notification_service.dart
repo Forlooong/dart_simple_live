@@ -22,7 +22,7 @@ import 'live_notifications/notification_subscription.dart';
 
 class LiveNotificationService extends GetxService with WidgetsBindingObserver {
   LiveNotificationService({bool? androidSupported})
-      : _androidSupported = androidSupported ?? Platform.isAndroid;
+    : _androidSupported = androidSupported ?? Platform.isAndroid;
 
   static LiveNotificationService get instance => Get.find();
 
@@ -39,60 +39,64 @@ class LiveNotificationService extends GetxService with WidgetsBindingObserver {
   Future<void> init() async {
     if (!_androidSupported || _initialized) return;
     _store = await openNotificationStore();
-    await _notifications.initialize(liveNotificationInitialization,
-        onDidReceiveNotificationResponse: (response) {
-      _pendingRoom = notificationRoomFromPayload(response.payload);
-      unawaited(_openPendingRoom());
-    });
+    await _notifications.initialize(
+      liveNotificationInitialization,
+      onDidReceiveNotificationResponse: (response) {
+        _pendingRoom = notificationRoomFromPayload(response.payload);
+        unawaited(_openPendingRoom());
+      },
+    );
     await _notifications
         .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>()
+          AndroidFlutterLocalNotificationsPlugin
+        >()
         ?.createNotificationChannel(liveNotificationChannel);
     await Workmanager().initialize(liveNotificationCallbackDispatcher);
     final launch = await _notifications.getNotificationAppLaunchDetails();
     if (launch?.didNotificationLaunchApp == true) {
-      _pendingRoom =
-          notificationRoomFromPayload(launch?.notificationResponse?.payload);
+      _pendingRoom = notificationRoomFromPayload(
+        launch?.notificationResponse?.payload,
+      );
     }
     WidgetsBinding.instance.addObserver(this);
-    _subscriptions.add(DBService.instance.followBox.watch().listen((_) {
-      _syncQuietly();
-    }));
-    _subscriptions
-        .add(LocalStorageService.instance.settingsBox.watch().listen((event) {
-      if (event.key == LocalStorageService.kBilibiliCookie ||
-          event.key == LocalStorageService.kDouyinCookie) {
+    _subscriptions.add(
+      DBService.instance.followBox.watch().listen((_) {
         _syncQuietly();
-      }
-    }));
+      }),
+    );
+    _subscriptions.add(
+      LocalStorageService.instance.credentialChanges.stream.listen((_) {
+        _syncQuietly();
+      }),
+    );
     _initialized = true;
     await _enqueueSync();
   }
 
   void _syncQuietly() {
-    unawaited(_enqueueSync().catchError((Object error) {
-      Log.w('开播提醒同步失败，将在下次操作或启动时重试');
-    }));
+    unawaited(
+      _enqueueSync().catchError((Object error) {
+        Log.w('开播提醒同步失败，将在下次操作或启动时重试');
+      }),
+    );
   }
 
   Future<void> _enqueueSync() {
     // Capture immediately: an off/on pair must not be coalesced into an unchanged
     // subscription, otherwise stale in-flight results could notify a new opt-in.
     final rooms = DBService.instance.followBox.values
-        .where((room) =>
-            room.notifyLive && Sites.allSites.containsKey(room.siteId))
-        .map((room) => (
-              id: room.id,
-              siteId: room.siteId,
-              roomId: room.roomId,
-              name: room.userName
-            ))
+        .where(
+          (room) => room.notifyLive && Sites.allSites.containsKey(room.siteId),
+        )
+        .map(
+          (room) => (
+            id: room.id,
+            siteId: room.siteId,
+            roomId: room.roomId,
+            name: room.userName,
+          ),
+        )
         .toList();
-    final settings = LocalStorageService.instance.settingsBox;
-    final biliCookie = settings.get(LocalStorageService.kBilibiliCookie,
-        defaultValue: '') as String;
-    final douyinCookie = settings.get(LocalStorageService.kDouyinCookie,
-        defaultValue: '') as String;
     // The UI is the only config writer, and its writes must remain ordered.
     _writes = _writes.catchError((Object _) {}).then((_) async {
       final old = await _store.readConfig();
@@ -106,19 +110,14 @@ class LiveNotificationService extends GetxService with WidgetsBindingObserver {
           userName: room.name,
           generation:
               before?.siteId == room.siteId && before?.roomId == room.roomId
-                  ? before!.generation
-                  : const Uuid().v4(),
+              ? before!.generation
+              : const Uuid().v4(),
         );
       }).toList();
-      await _store.writeConfig(NotificationConfig(
-        rooms: selected,
-        bilibiliCookie:
-            selected.any((room) => room.siteId == 'bilibili') ? biliCookie : '',
-        douyinCookie:
-            selected.any((room) => room.siteId == 'douyin') ? douyinCookie : '',
-      ));
-      for (final removed in old.rooms
-          .where((oldRoom) => !selected.any((room) => room.id == oldRoom.id))) {
+      await _store.writeConfig(NotificationConfig(rooms: selected));
+      for (final removed in old.rooms.where(
+        (oldRoom) => !selected.any((room) => room.id == oldRoom.id),
+      )) {
         await _notifications.cancel(liveNotificationId(removed.id));
       }
       if (selected.isEmpty) {
@@ -141,12 +140,14 @@ class LiveNotificationService extends GetxService with WidgetsBindingObserver {
     try {
       await init();
       final box = DBService.instance.followBox;
-      var current = box.get(item.id);
+      final current = box.get(item.id);
       if (current == null) throw Exception('直播间已取消关注');
       final enabled = !current.notifyLive;
       if (enabled) {
-        final android = _notifications.resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
+        final android = _notifications
+            .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin
+            >();
         final granted = await android?.requestNotificationsPermission();
         if (granted != true ||
             await android?.areNotificationsEnabled() != true) {
@@ -154,20 +155,20 @@ class LiveNotificationService extends GetxService with WidgetsBindingObserver {
         }
       }
       // The permission dialog may have outlived a sync or an unfollow.
-      current = box.get(item.id);
-      if (current == null) throw Exception('直播间已取消关注');
-      final oldValue = current.notifyLive;
-      current.notifyLive = enabled;
-      await box.put(current.id, current);
+      final change = await DBService.instance.setFollowNotification(
+        item.id,
+        enabled,
+      );
       try {
         await _enqueueSync();
       } catch (_) {
-        current.notifyLive = oldValue;
-        await box.put(current.id, current);
+        await DBService.instance.rollbackFollowNotification(
+          change.saved,
+          change.previous,
+        );
         await _enqueueSync();
         rethrow;
       }
-      item.notifyLive = enabled;
       return enabled;
     } on Exception catch (error) {
       if (error.toString().startsWith('Exception: ')) rethrow;
@@ -205,7 +206,12 @@ class LiveNotificationService extends GetxService with WidgetsBindingObserver {
         // A popped GetX route retains its controller until its transition ends.
         // Wait for disposal before looking up or creating a room controller.
         await liveNotificationNavigationObserver.waitForRetiringLiveRooms();
-        await PlayerController.pendingCleanup;
+        if (!await AppNavigator.waitForPlayerCleanup(
+          PlayerController.pendingCleanup,
+        )) {
+          _pendingRoom = null;
+          break;
+        }
         if (WidgetsBinding.instance.lifecycleState != null &&
             WidgetsBinding.instance.lifecycleState !=
                 AppLifecycleState.resumed) {

@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'package:simple_live_core/simple_live_core.dart';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -20,9 +22,24 @@ class LocalSyncController extends BaseController {
 
   @override
   void onInit() {
-    SyncService.instance.refreshClients();
-    Future.delayed(Duration.zero, initConnect);
+    unawaited(_start());
     super.onInit();
+  }
+
+  bool _closing = false;
+  Future<void> _start() async {
+    await SyncService.instance.startSession();
+    if (_closing) return;
+    SyncService.instance.refreshClients();
+    initConnect();
+  }
+
+  @override
+  void onClose() {
+    _closing = true;
+    addressController.dispose();
+    unawaited(SyncService.instance.stopSession());
+    super.onClose();
   }
 
   void initConnect() {
@@ -41,15 +58,14 @@ class LocalSyncController extends BaseController {
       SmartDialog.showToast("请输入地址");
       return;
     }
-    if (address.startsWith('http')) {
-      var uri = Uri.tryParse(address);
-      if (uri != null) {
-        address = uri.host;
-      }
-    } else if (address.contains(':')) {
-      var parts = address.split(":");
-      address = parts.first;
+    final uri = Uri.tryParse(
+      address.contains('://') ? address : 'simplelive://$address',
+    );
+    if (uri == null || uri.host.isEmpty) {
+      SmartDialog.showToast('地址无效');
+      return;
     }
+    address = uri.host;
 
     var client = SyncClinet(
       id: 'manual',
@@ -58,14 +74,25 @@ class LocalSyncController extends BaseController {
       name: "手动输入",
       type: Platform.operatingSystem,
     );
-    connectClient(client);
+    connectClient(client, pairingKey: uri.fragment);
   }
 
-  void connectClient(SyncClinet client) async {
+  void connectClient(SyncClinet client, {String? pairingKey}) async {
     try {
+      pairingKey ??= '';
+      if (pairingKey.isEmpty) {
+        pairingKey = await Utils.showEditTextDialog(
+          '',
+          title: '配对码',
+          hintText: '输入接收端显示的完整配对码，或返回扫码',
+        );
+      }
+      if (_closing || pairingKey == null || pairingKey.isEmpty) return;
+      client.cipher = SyncCipher(pairingKey);
+
       SmartDialog.showLoading(msg: "连接中...");
       var info = await request.getClientInfo(client);
-      AppNavigator.toSyncDevice(client, info);
+      if (!_closing) AppNavigator.toSyncDevice(client, info);
     } catch (e) {
       SmartDialog.showToast("连接失败:$e");
     } finally {
@@ -120,13 +147,18 @@ class LocalSyncController extends BaseController {
                 Get.back();
               },
               child: QrImageView(
-                data: SyncService.instance.ipAddress.value,
+                data: SyncService.instance.pairingAddress,
                 version: QrVersions.auto,
                 backgroundColor: Colors.white,
                 padding: AppStyle.edgeInsetsA12,
                 size: 200,
               ),
             ),
+          ),
+          AppStyle.vGap12,
+          SelectableText(
+            SyncService.instance.pairingKey,
+            textAlign: TextAlign.center,
           ),
           AppStyle.vGap24,
           Visibility(
@@ -147,7 +179,7 @@ class LocalSyncController extends BaseController {
           Visibility(
             visible: SyncService.instance.httpRunning.value,
             child: const Text(
-              "请使用其他Simple Live客户端扫描上方二维码\n建立连接后可选择需要同步的数据",
+              "请用新版客户端扫码或输入配对码，并在本机确认\n会话有效期10分钟，退出此页面即关闭",
               textAlign: TextAlign.center,
             ),
           ),

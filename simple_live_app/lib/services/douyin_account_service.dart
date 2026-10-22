@@ -25,19 +25,13 @@ class DouyinAccountService extends GetxService {
     site.cookie = cookie;
   }
 
-  void setCookie(String cookie) {
-    this.cookie = cookie;
-    LocalStorageService.instance
+  Future<void> setCookie(String cookie) async {
+    await LocalStorageService.instance
         .setValue(LocalStorageService.kDouyinCookie, cookie);
+    this.cookie = cookie;
     hasCookie.value = cookie.isNotEmpty;
     setSite();
   }
 
-  void clearCookie() {
-    cookie = "";
-    LocalStorageService.instance
-        .setValue(LocalStorageService.kDouyinCookie, "");
-    hasCookie.value = false;
-    setSite();
-  }
+  Future<void> clearCookie() => setCookie('');
 }

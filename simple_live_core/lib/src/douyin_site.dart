@@ -25,8 +25,8 @@ class DouyinSite extends LiveSite {
 
   static const String kDefaultAuthority = "live.douyin.com";
 
-  /// 默认 Cookie - 只需要 ttwid 字段即可获取所有画质（包括蓝光）
-  /// 经过测试验证，LOGIN_STATUS=1 等其他字段都是可选的
+  /// Legacy guest-session compatibility value; user credentials always win.
+  /// Its continued validity is platform-dependent and must not be assumed.
   static const String kDefaultCookie =
       "ttwid=1%7CB1qls3GdnZhUov9o2NxOMxxYS2ff6OSvEWbv0ytbES4%7C1680522049%7C280d802d6d478e3e78d0c807f7c487e7ffec0ae4e5fdd6a0fe74c3c6af149511";
 
@@ -45,31 +45,16 @@ class DouyinSite extends LiveSite {
     CoreLog.d("[Douyin] $msg");
   }
 
-  Map<String, dynamic> headers = {
+  final Map<String, dynamic> headers = const {
     "Authority": kDefaultAuthority,
     "Referer": kDefaultReferer,
     "User-Agent": kDefaultUserAgent,
   };
 
-  Future<Map<String, dynamic>> getRequestHeaders() async {
-    try {
-      // 如果用户已设置 cookie，直接使用用户的 cookie
-      if (cookie.isNotEmpty) {
-        headers["cookie"] = cookie;
-        return headers;
-      }
-
-      // 使用默认的 ttwid cookie（只需要 ttwid 即可获取所有画质）
-      headers["cookie"] = kDefaultCookie;
-      return headers;
-    } catch (e) {
-      CoreLog.error(e);
-      if (!(headers["cookie"]?.toString().isNotEmpty ?? false)) {
-        headers["cookie"] = kDefaultCookie;
-      }
-      return headers;
-    }
-  }
+  Future<Map<String, dynamic>> getRequestHeaders() async => {
+    ...headers,
+    'cookie': cookie.isNotEmpty ? cookie : kDefaultCookie,
+  };
 
   @override
   Future<List<LiveCategory>> getCategores() async {
@@ -586,6 +571,8 @@ class DouyinSite extends LiveSite {
             urls.add(hlsList[hlsIndex]);
           }
           var qualityItem = LivePlayQuality(
+            id: quality['sdk_key'] is String && (quality['sdk_key'] as String).isNotEmpty
+                ? quality['sdk_key'] as String : null,
             quality: quality["name"],
             sort: level,
             data: urls,
@@ -614,6 +601,8 @@ class DouyinSite extends LiveSite {
           }
 
           var qualityItem = LivePlayQuality(
+            id: quality['sdk_key'] is String && (quality['sdk_key'] as String).isNotEmpty
+                ? quality['sdk_key'] as String : null,
             quality: quality["name"],
             sort: quality["level"],
             data: urls,

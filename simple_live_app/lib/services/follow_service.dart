@@ -156,25 +156,13 @@ class FollowService extends GetxService with WidgetsBindingObserver {
 
   // 根据标签筛选数据
   void filterDataByTag(FollowUserTag tag) {
-    curTagFollowList.clear();
-    // 用一个新的列表来存储需要删除的 userId
-    List<String> toRemove = [];
-    for (var id in tag.userId) {
-      if (followList.any((x) => x.id == id)) {
-        // 找到对应的 followUser 添加到 curTagFollowList
-        curTagFollowList.add(followList.firstWhere((x) => x.id == id));
-      } else {
-        // 标记要删除的 id
-        toRemove.add(id);
-      }
-    }
-    // 双向确认用户取消关注后标签内是否还有该用户
-    // 在遍历结束后统一移除不在 followList 中的 id
-    tag.userId.removeWhere((id) => toRemove.contains(id));
-    // 更新数据库
-    if (toRemove.isNotEmpty) {
-      DBService.instance.updateFollowTag(tag);
-    }
+    final current = DBService.instance.getFollowTagList().firstWhereOrNull(
+      (item) => item.id == tag.id,
+    );
+    final ids = (current?.userId ?? const <String>[]).toSet();
+    curTagFollowList.assignAll(
+      followList.where((user) => ids.contains(user.id)),
+    );
     // 标签内排序
     curTagFollowList.sort(
       (a, b) => b.liveStatus.value.compareTo(a.liveStatus.value),
@@ -220,7 +208,7 @@ class FollowService extends GetxService with WidgetsBindingObserver {
     if (!resumed) {
       updateTimer?.cancel();
       if (_refreshQueue.isRunning) _nextRefresh = _now();
-      _refreshQueue.pause();
+      _refreshQueue.cancel();
     } else if (!wasForeground) {
       // An interrupted manual refresh must resume even with periodic polling off.
       // Never await its completion here: it may be waiting for this foreground.
@@ -555,23 +543,7 @@ class FollowService extends GetxService with WidgetsBindingObserver {
   }
 
   Future inputJson(String content) async {
-    var data = jsonDecode(content);
-
-    for (var item in data) {
-      var follow = FollowUser.fromJson(
-        item,
-        existing: DBService.instance.followBox.get(item['id']),
-      );
-      // 导入关注列表同时导入标签列表 此方法可优化为所有导入逻辑
-      if (follow.tag != "全部") {
-        // logic: 尝试添加，存在则返回已存在的对象
-        var tag = await DBService.instance.addFollowTag(follow.tag);
-        // 更新tag
-        tag.userId.addIf(!tag.userId.contains(follow.id), follow.id);
-        await DBService.instance.updateFollowTag(tag);
-      }
-      await DBService.instance.addFollow(follow);
-    }
+    await DBService.instance.importFollows(jsonDecode(content), replace: false);
   }
 
   @override
@@ -579,7 +551,7 @@ class FollowService extends GetxService with WidgetsBindingObserver {
     if (_closed) return;
     _closed = true;
     _generation++;
-    _refreshQueue.pause();
+    _refreshQueue.cancel();
     _finishRefresh();
     _concurrencyWorker?.dispose();
     WidgetsBinding.instance.removeObserver(this);

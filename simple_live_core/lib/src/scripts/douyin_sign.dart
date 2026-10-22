@@ -10649,42 +10649,78 @@ function getMSSDKSignature(msStub, userAgent) {
 
   static const String defaultUserAgent = DouyinSite.kDefaultUserAgent;
   static String getAbogusUrl(String url, String userAgent) {
-    JsRuntime flutterJs = JsRuntime(
-      memoryLimit: 4 * 1024 * 1024,
-      maxStackSize: 64 * 1024,
-    );
     final msToken = generateMsToken(107);
     var params = ('$url&msToken=$msToken').split('?')[1];
     var query = params.contains("?") ? params.split("?")[1] : params;
-    var jsCode = kABogus;
-    flutterJs.eval(jsCode);
-    // 执行getABogus函数
-    var aBogus = flutterJs.eval("getABogus('$query', '$userAgent')");
-    flutterJs.dispose();
+    final aBogus = _evaluate(
+      kABogus,
+      '(query, userAgent) => getABogus(query, userAgent)',
+      [query, userAgent],
+      maxStackSize: 64 * 1024,
+    );
     var newUrl =
         '$url&msToken=${Uri.encodeComponent(msToken)}&a_bogus=${Uri.encodeComponent(aBogus)}';
     return newUrl;
   }
 
   static String getSignature(String roomId, String uniqueId) {
-    JsRuntime flutterJs = JsRuntime(
-      memoryLimit: 4 * 1024 * 1024,
+    return _evaluate(
+      kWebMsSDK,
+      '''(msStub, userAgent) => {
+        for (let attempt = 0; attempt < 8; attempt++) {
+          const value = getMSSDKSignature(msStub, userAgent);
+          if (typeof value !== 'string') throw new TypeError('Invalid signature');
+          if (!value.includes('-') && !value.includes('=')) return value;
+        }
+        throw new Error('Signature retry limit');
+      }''',
+      [getMsStub(roomId, uniqueId), defaultUserAgent],
       maxStackSize: 128 * 1024,
     );
+  }
 
-    flutterJs.eval(kWebMsSDK);
-    var msStub = getMsStub(roomId, uniqueId);
-    var signature = flutterJs.eval(
-      "getMSSDKSignature('$msStub','$defaultUserAgent')",
+  static String _evaluate(
+    String script,
+    String functionSource,
+    List<String> arguments, {
+    required int maxStackSize,
+  }) {
+    final context = RequestContext.current;
+    context?.check();
+    final remaining = context?.remaining ?? const Duration(seconds: 1);
+    final runtime = JsRuntime(
+      memoryLimit: 4 * 1024 * 1024,
+      maxStackSize: maxStackSize,
+      executionTimeout: remaining < const Duration(seconds: 1)
+          ? remaining
+          : const Duration(seconds: 1),
+      maxStringBytes: 64 * 1024,
     );
-    // 如果signature中包含-或=，重新生成
-    while (signature.contains('-') || signature.contains('=')) {
-      signature = flutterJs.eval(
-        "getMSSDKSignature('$msStub','$defaultUserAgent')",
+    try {
+      runtime.eval('$script\n;void 0;');
+      final function = runtime.evalFunction(functionSource);
+      try {
+        final result = function.call(arguments);
+        context?.check();
+        if (result is! String || result.isEmpty) {
+          throw const FormatException('Invalid signature result');
+        }
+        return result;
+      } finally {
+        function.dispose();
+      }
+    } on JsExecutionTimeoutException {
+      throw CoreError('平台签名执行超时', kind: CoreErrorKind.timeout, site: 'douyin');
+    } catch (_) {
+      context?.check();
+      throw CoreError(
+        '平台签名执行失败',
+        kind: CoreErrorKind.schemaChanged,
+        site: 'douyin',
       );
+    } finally {
+      runtime.dispose();
     }
-    flutterJs.dispose();
-    return signature;
   }
 
   static String getMsStub(String roomId, String uniqueId) {

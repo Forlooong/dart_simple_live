@@ -14,7 +14,7 @@ class AccountController extends GetxController {
     if (BiliBiliAccountService.instance.logined.value) {
       var result = await Utils.showAlertDialog("确定要退出哔哩哔哩账号吗？", title: "退出登录");
       if (result) {
-        BiliBiliAccountService.instance.logout();
+        await BiliBiliAccountService.instance.logout();
       }
     } else {
       //AppNavigator.toBiliBiliLogin();
@@ -75,7 +75,7 @@ class AccountController extends GetxController {
     if (cookie == null || cookie.isEmpty) {
       return;
     }
-    BiliBiliAccountService.instance.setCookie(cookie);
+    await BiliBiliAccountService.instance.setCookie(cookie);
     await BiliBiliAccountService.instance.loadUserInfo();
   }
 
@@ -83,7 +83,7 @@ class AccountController extends GetxController {
     if (DouyinAccountService.instance.hasCookie.value) {
       var result = await Utils.showAlertDialog("确定要清除自定义 ttwid 吗？", title: "清除配置");
       if (result) {
-        DouyinAccountService.instance.clearCookie();
+        await DouyinAccountService.instance.clearCookie();
         SmartDialog.showToast("已清除自定义 ttwid，将使用默认 ttwid");
       }
     } else {
@@ -109,7 +109,7 @@ class AccountController extends GetxController {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                "默认已内置有效的 ttwid，可观看所有画质（包括蓝光）。\n如有需要可自定义配置。",
+                "内置 ttwid 仅用于兼容访问，有效性取决于平台。\n如有需要可自定义配置。",
                 style: TextStyle(fontSize: 12, color: Colors.grey),
               ),
               const SizedBox(height: 12),
@@ -143,11 +143,11 @@ class AccountController extends GetxController {
             child: const Text("取消"),
           ),
           TextButton(
-            onPressed: () {
+            onPressed: () async {
               var input = controller.text.trim();
               Get.back();
               if (input.isEmpty) {
-                DouyinAccountService.instance.clearCookie();
+                await DouyinAccountService.instance.clearCookie();
                 SmartDialog.showToast("已清除自定义 Cookie，将使用默认 ttwid");
               } else {
                 // 如果用户只输入了 ttwid 值，自动添加 "ttwid=" 前缀
@@ -155,7 +155,7 @@ class AccountController extends GetxController {
                 if (!input.startsWith('ttwid=')) {
                   cookie = 'ttwid=$input';
                 }
-                DouyinAccountService.instance.setCookie(cookie);
+                await DouyinAccountService.instance.setCookie(cookie);
                 SmartDialog.showToast("ttwid 已保存");
               }
             },

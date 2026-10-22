@@ -19,6 +19,30 @@ class AppColors {
 }
 
 class AppStyle {
+  /// Opt-in workaround for an observed Android freeform-window inset problem.
+  /// Large safe areas are otherwise valid, and accessibility scaling is retained.
+  static MediaQueryData windowMediaQuery(
+    MediaQueryData data, {
+    required bool android,
+    required bool windowed,
+    required bool workaround,
+  }) {
+    if (!android ||
+        !windowed ||
+        !workaround ||
+        data.viewInsets.bottom != 0 ||
+        data.viewPadding.top <= 50) {
+      return data;
+    }
+    final corrected = EdgeInsets.fromLTRB(
+      data.viewPadding.left,
+      25,
+      data.viewPadding.right,
+      35,
+    );
+    return data.copyWith(viewPadding: corrected, padding: corrected);
+  }
+
   static ThemeData lightTheme = ThemeData(
     colorScheme: AppColors.lightColorScheme,
     useMaterial3: true,

@@ -65,44 +65,61 @@ void main() async {
 }
 
 /// 将Hive数据迁移到Application Support
-Future migrateData() async {
-  if (Platform.isAndroid || Platform.isIOS) {
-    return;
-  }
-  var hiveFileList = [
-    "followuser",
-    //旧版本写错成hostiry了
-    "hostiry",
-    "followusertag",
-    "localstorage",
-    "danmushield",
-  ];
-  try {
-    var newDir = await getApplicationSupportDirectory();
-    var hiveFile = File(p.join(newDir.path, "followuser.hive"));
-    if (await hiveFile.exists()) {
-      return;
-    }
-
-    var oldDir = await getApplicationDocumentsDirectory();
-    for (var element in hiveFileList) {
-      var oldFile = File(p.join(oldDir.path, "$element.hive"));
-      if (await oldFile.exists()) {
-        var fileName = "$element.hive";
-        if (element == "hostiry") {
-          fileName = "history.hive";
-        }
-        await oldFile.copy(p.join(newDir.path, fileName));
-        await oldFile.delete();
+Future<void> migrateData({
+  Directory? source,
+  Directory? destination,
+  FutureOr<void> Function(String name)? beforeCopy,
+}) async {
+  if (source == null && (Platform.isAndroid || Platform.isIOS)) return;
+  final oldDir = source ?? await getApplicationDocumentsDirectory();
+  final newDir = destination ?? await getApplicationSupportDirectory();
+  if (p.equals(oldDir.absolute.path, newDir.absolute.path)) return;
+  await newDir.create(recursive: true);
+  final completed = File(
+    p.join(newDir.path, '.desktop-hive-migration-complete'),
+  );
+  if (await completed.exists()) return;
+  // Prefer the correctly spelled legacy history if both names exist. Existing
+  // destinations belong to the running installation and are never overwritten.
+  const files = {
+    'followuser': 'followuser',
+    'history': 'history',
+    'hostiry': 'history',
+    'followusertag': 'followusertag',
+    'localstorage': 'localstorage',
+    'danmushield': 'danmushield',
+  };
+  for (final entry in files.entries) {
+    final original = File(p.join(oldDir.path, '${entry.key}.hive'));
+    final target = File(p.join(newDir.path, '${entry.value}.hive'));
+    if (await target.exists() || !await original.exists()) continue;
+    final temporary = File('${target.path}.migrating');
+    try {
+      await beforeCopy?.call(entry.key);
+      await original.copy(temporary.path);
+      if (!listEquals(
+        await original.readAsBytes(),
+        await temporary.readAsBytes(),
+      )) {
+        throw FileSystemException(
+          'Hive migration verification failed',
+          target.path,
+        );
       }
-      var lockFile = File(p.join(oldDir.path, "$element.lock"));
-      if (await lockFile.exists()) {
-        await lockFile.delete();
+      final handle = await temporary.open(mode: FileMode.append);
+      try {
+        await handle.flush();
+      } finally {
+        await handle.close();
       }
+      await temporary.rename(target.path);
+    } finally {
+      if (await temporary.exists()) await temporary.delete();
     }
-  } catch (e) {
-    Log.logPrint(e);
   }
+  // A failed copy aborts startup instead of creating empty boxes over files that
+  // still need migration. Sources remain available for recovery after completion.
+  await completed.writeAsString('1', flush: true);
 }
 
 Future initWindow() async {
@@ -229,24 +246,17 @@ class MyApp extends StatelessWidget {
         ],
         builder: FlutterSmartDialog.init(
           loadingBuilder: ((msg) => const AppLoaddingWidget()),
-          //字体大小不跟随系统变化
           builder: (context, child) {
-            // Fix for HyperOS windowed-mode Flutter bug:
-            // - Values > 50 indicate the bug (windowed mode on HyperOS)
-            // - Values == 0 are valid for fullscreen/immersive mode and must NOT be treated as abnormal
-            const fallbackPadding = EdgeInsets.only(top: 25, bottom: 35);
-            const maxNormalPadding = 50.0;
-
             final mediaQueryData = MediaQuery.of(context);
-            final hasAbnormalPadding = mediaQueryData.viewPadding.top > maxNormalPadding;
-
-            final fixedMediaQueryData = hasAbnormalPadding
-                ? mediaQueryData.copyWith(
-                    viewPadding: fallbackPadding,
-                    padding: fallbackPadding,
-                    textScaler: const TextScaler.linear(1.0),
-                  )
-                : mediaQueryData.copyWith(textScaler: const TextScaler.linear(1.0));
+            final display = View.of(context).display;
+            final displaySize = display.size / display.devicePixelRatio;
+            final fixedMediaQueryData = AppStyle.windowMediaQuery(
+              mediaQueryData,
+              android: Platform.isAndroid,
+              windowed: mediaQueryData.size.width < displaySize.width - 1 ||
+                  mediaQueryData.size.height < displaySize.height - 1,
+              workaround: AppSettingsController.instance.windowPaddingWorkaround.value,
+            );
 
             return MediaQuery(
               data: fixedMediaQueryData,

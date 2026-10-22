@@ -1,30 +1,61 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import 'package:simple_live_app/main.dart';
+import 'package:simple_live_app/app/app_style.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
-
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
-
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+  const data = MediaQueryData(
+    size: Size(400, 600),
+    viewPadding: EdgeInsets.fromLTRB(12, 60, 14, 40),
+    padding: EdgeInsets.fromLTRB(12, 60, 14, 40),
+    textScaler: TextScaler.linear(2),
+  );
+  test('valid safe areas and system font scale survive by default', () {
+    for (final flags in [
+      (false, true, true),
+      (true, false, true),
+      (true, true, false),
+    ]) {
+      expect(
+        AppStyle.windowMediaQuery(
+          data,
+          android: flags.$1,
+          windowed: flags.$2,
+          workaround: flags.$3,
+        ),
+        same(data),
+      );
+    }
+  });
+  test('opt-in Android window correction retains sides and accessibility', () {
+    final result = AppStyle.windowMediaQuery(
+      data,
+      android: true,
+      windowed: true,
+      workaround: true,
+    );
+    expect(result.viewPadding, const EdgeInsets.fromLTRB(12, 25, 14, 35));
+    expect(result.textScaler.scale(20), 40);
+    final keyboard = data.copyWith(
+      viewInsets: const EdgeInsets.only(bottom: 300),
+    );
+    expect(
+      AppStyle.windowMediaQuery(
+        keyboard,
+        android: true,
+        windowed: true,
+        workaround: true,
+      ),
+      same(keyboard),
+    );
+    final fullscreen = data.copyWith(viewPadding: EdgeInsets.zero);
+    expect(
+      AppStyle.windowMediaQuery(
+        fullscreen,
+        android: true,
+        windowed: true,
+        workaround: true,
+      ),
+      same(fullscreen),
+    );
   });
 }

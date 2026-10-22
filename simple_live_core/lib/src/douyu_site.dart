@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:simple_live_core/src/common/http_client.dart';
+import 'package:simple_live_core/src/common/playback_response.dart';
 import 'package:simple_live_core/src/common/live_status_parser.dart';
 import 'package:simple_live_core/src/danmaku/douyu_danmaku.dart';
 import 'package:simple_live_core/src/interface/live_danmaku.dart';
@@ -106,9 +107,12 @@ class DouyuSite extends LiveSite {
       formUrlEncoded: true,
     );
 
+    final response = playbackData(result, id, codeKey: 'error');
     var cdns = <String>[];
-    for (var item in result["data"]["cdnsWithName"]) {
-      cdns.add(item["cdn"].toString());
+    for (var item in playbackList(response['cdnsWithName'], id)) {
+      final cdn = playbackMap(item, id)['cdn'];
+      if (cdn is! String || cdn.isEmpty) invalidPlayback(id);
+      cdns.add(cdn);
     }
 
     // 如果cdn以scdn开头，将其放到最后
@@ -121,9 +125,12 @@ class DouyuSite extends LiveSite {
       return 0;
     });
 
-    for (var item in result["data"]["multirates"]) {
+    for (var value in playbackList(response['multirates'], id)) {
+      final item = playbackMap(value, id);
+      if (item['rate'] is! int || item['name'] is! String) invalidPlayback(id);
       qualities.add(
         LivePlayQuality(
+          id: item['rate'].toString(),
           quality: item["name"].toString(),
           data: DouyuPlayData(item["rate"], cdns),
         ),
@@ -140,13 +147,8 @@ class DouyuSite extends LiveSite {
     var args = detail.data.toString();
     var data = quality.data as DouyuPlayData;
 
-    List<String> urls = [];
-    for (var item in data.cdns) {
-      var url = await getPlayUrl(detail.roomId, args, data.rate, item);
-      if (url.isNotEmpty) {
-        urls.add(url);
-      }
-    }
+    final urls = await collectPlaybackUrls<String>(data.cdns,
+        (cdn) => getPlayUrl(detail.roomId, args, data.rate, cdn), id);
     return LivePlayUrl(urls: urls);
   }
 
@@ -168,7 +170,12 @@ class DouyuSite extends LiveSite {
       formUrlEncoded: true,
     );
 
-    return "${result["data"]["rtmp_url"]}/${HtmlUnescape().convert(result["data"]["rtmp_live"].toString())}";
+    final data = playbackData(result, id, codeKey: 'error');
+    if (data['rtmp_url'] is! String || data['rtmp_live'] is! String ||
+        (data['rtmp_live'] as String).isEmpty) {
+      invalidPlayback(id);
+    }
+    return playbackUrl('${data["rtmp_url"]}/${HtmlUnescape().convert(data["rtmp_live"])}', id);
   }
 
   @override
@@ -251,7 +258,7 @@ class DouyuSite extends LiveSite {
       notice: "",
       status: roomInfo["show_status"] == 1 && roomInfo["videoLoop"] != 1,
       danmakuData: roomInfo["room_id"].toString(),
-      data: DouyuSign.getSign(crptext, roomInfo["room_id"].toString()),
+      data: await DouyuSign.getSign(crptext, roomInfo["room_id"].toString()),
       url: "https://www.douyu.com/$roomId",
       isRecord: roomInfo["videoLoop"] == 1,
       showTime: showTime,

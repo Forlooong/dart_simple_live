@@ -344,10 +344,12 @@ void main() {
       final oldRefresh = room.refreshFromProvider();
       await _until(() => !room.liveStatus.value);
       provider.offline = false;
-      await room.refreshFromProvider();
+      final freshRefresh = room.refreshFromProvider();
+      await _until(() => room.liveStatus.value);
       release.complete();
       await held;
       await oldRefresh;
+      await freshRefresh;
       await _until(() => native.opens.length == 2);
 
       expect(room.loadError.value, isFalse);

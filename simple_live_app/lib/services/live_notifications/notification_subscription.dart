@@ -53,14 +53,10 @@ class NotificationConfig {
             .map((room) => NotificationSubscription.fromJson(
                 Map<String, dynamic>.from(room as Map)))
             .toList(),
-        bilibiliCookie: json['bilibiliCookie'] as String? ?? '',
-        douyinCookie: json['douyinCookie'] as String? ?? '',
       );
 
   Map<String, dynamic> toJson() => {
-        'version': 1,
+        'version': 2,
         'rooms': rooms.map((room) => room.toJson()).toList(),
-        'bilibiliCookie': bilibiliCookie,
-        'douyinCookie': douyinCookie,
       };
 }

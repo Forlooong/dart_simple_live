@@ -13,9 +13,7 @@ class RemoteSyncWebDAVPage extends GetView<RemoteSyncWebDAVController> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text("WebDAV同步"),
-      ),
+      appBar: AppBar(title: const Text("WebDAV同步")),
       body: ListView(
         padding: AppStyle.edgeInsetsA12,
         children: [
@@ -124,7 +122,8 @@ class RemoteSyncWebDAVPage extends GetView<RemoteSyncWebDAVController> {
           Obx(
             () => CheckboxListTile(
               secondary: const Icon(Remix.account_circle_line),
-              title: const Text("同步哔哩哔哩账号"),
+              title: const Text("从旧备份恢复哔哩哔哩账号"),
+              subtitle: const Text("默认关闭；新备份不包含账号和 WebDAV 凭据"),
               value: controller.isSyncBilibiliAccount.value,
               controlAffinity: ListTileControlAffinity.trailing,
               onChanged: (value) => controller.changeIsSyncBilibiliAccount(),

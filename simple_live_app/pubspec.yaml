@@ -1,5 +1,5 @@
 name: simple_live_app
-version: 1.12.16+11117
+version: 1.12.17+11118
 publish_to: none
 description: "Simple Live APP"
 environment:
@@ -17,6 +17,7 @@ dependencies:
   dio: ^5.9.0 #网络请求
   hive: 2.2.3 #持久化存储
   hive_flutter: 1.1.0 #持久化存储
+  flutter_secure_storage: 9.2.4 #平台凭据存储；保持当前 Android 工具链
   logger: ^2.6.2 #日志
   intl: ^0.20.2 #国际化
   qr_flutter: ^4.1.0 #二维码生成

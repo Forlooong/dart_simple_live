@@ -1,5 +1,9 @@
+import 'dart:async';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:get/get.dart';
 import 'package:hive/hive.dart';
+import 'package:simple_live_core/simple_live_core.dart'
+    show validateShieldRules;
 import 'package:simple_live_tv_app/app/log.dart';
 
 class LocalStorageService extends GetxService {
@@ -123,22 +127,125 @@ class LocalStorageService extends GetxService {
   /// 开启多线程更新关注
   static const String kUpdateFollowThreadCount = "UpdateFollowThreadCount";
 
+  static const credentialKeys = <String>{kBilibiliCookie};
+  static const secureStorage = FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+    iOptions: IOSOptions(
+      accessibility: KeychainAccessibility.first_unlock_this_device,
+    ),
+  );
+  final Map<String, String> _credentials = {};
+  final credentialChanges = StreamController<String>.broadcast();
+  Future<void> _credentialWrites = Future.value();
+
+  Future<void> migrateCredentials() async {
+    const pendingCompaction = '_pendingCredentialCompaction';
+    var needsCompaction = settingsBox.get(pendingCompaction) == true;
+    for (final key in credentialKeys) {
+      var value = await secureStorage.read(key: key);
+      final legacy = settingsBox.get(key);
+      if (value == null && legacy is String) {
+        await secureStorage.write(key: key, value: legacy);
+        value = legacy;
+      }
+      if (value != null) _credentials[key] = value;
+      // Only remove the old copy after platform storage confirms the write.
+      if (settingsBox.containsKey(key)) {
+        // Persist intent before removing the key: a crash between deletion and
+        // compaction must not leave obsolete plaintext records indefinitely.
+        if (!needsCompaction) {
+          await settingsBox.put(pendingCompaction, true);
+          await settingsBox.flush();
+          needsCompaction = true;
+        }
+        await settingsBox.delete(key);
+      }
+    }
+    await settingsBox.flush();
+    // Compact migrated live storage after the vault write succeeds. Historical
+    // backups and old logs are retained for user-controlled cleanup.
+    if (needsCompaction) {
+      await settingsBox.compact();
+      await settingsBox.delete(pendingCompaction);
+      await settingsBox.flush();
+    }
+  }
+
+  Future<void> _shieldWrites = Future.value();
+
+  Future<Set<String>> updateShieldRules(
+    Iterable<dynamic> data, {
+    required bool replace,
+    String? remove,
+  }) {
+    final incoming = validateShieldRules(data);
+    final result = _shieldWrites.then((_) async {
+      await recoverShieldRules();
+      final previous = Map<dynamic, String>.from(shieldBox.toMap());
+      final next = <String>{if (!replace) ...previous.values, ...incoming};
+      if (remove != null) next.remove(remove);
+      if (remove == null) validateShieldRules(next);
+      await settingsBox.put('_pendingShieldRestore', previous);
+      await settingsBox.flush();
+      // Hive deletes append tombstones; compact the migrated live box so old
+      // credential values are not retained in its obsolete records.
+      try {
+        await shieldBox.putAll({for (final rule in next) rule: rule});
+        await shieldBox.deleteAll(
+          shieldBox.keys.where((key) => !next.contains(key)).toList(),
+        );
+        await shieldBox.flush();
+        await settingsBox.delete('_pendingShieldRestore');
+        await settingsBox.flush();
+        // Hive deletes append tombstones; compact the migrated live box so old
+        // credential values are not retained in its obsolete records.
+      } catch (_) {
+        await settingsBox.put('_pendingShieldRestore', previous);
+        await settingsBox.flush();
+        // Hive deletes append tombstones; compact the migrated live box so old
+        // credential values are not retained in its obsolete records.
+        await recoverShieldRules();
+        rethrow;
+      }
+      return next;
+    });
+    _shieldWrites = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace __) {},
+    );
+    return result;
+  }
+
+  Future<void> recoverShieldRules() async {
+    final previous = settingsBox.get('_pendingShieldRestore');
+    if (previous == null) return;
+    final records = Map<dynamic, String>.from(previous as Map);
+    await shieldBox.putAll(records);
+    await shieldBox.deleteAll(
+      shieldBox.keys.where((key) => !records.containsKey(key)).toList(),
+    );
+    await shieldBox.flush();
+    await settingsBox.delete('_pendingShieldRestore');
+    await settingsBox.flush();
+  }
+
   late Box settingsBox;
   late Box<String> shieldBox;
 
   Future init() async {
-    settingsBox = await Hive.openBox(
-      "TVLocalStorage",
-    );
-    shieldBox = await Hive.openBox(
-      "TVDanmuShield",
-    );
+    settingsBox = await Hive.openBox("TVLocalStorage");
+    await migrateCredentials();
+    shieldBox = await Hive.openBox("TVDanmuShield");
+    await recoverShieldRules();
   }
 
   T getValue<T>(dynamic key, T defaultValue) {
     try {
-      var value = settingsBox.get(key, defaultValue: defaultValue) as T;
-      Log.d("Get LocalStorage：$key\r\n$value");
+      final value =
+          (credentialKeys.contains(key)
+                  ? (_credentials[key] ?? defaultValue)
+                  : settingsBox.get(key, defaultValue: defaultValue))
+              as T;
       return value;
     } catch (e) {
       Log.logPrint(e);
@@ -147,12 +254,21 @@ class LocalStorageService extends GetxService {
   }
 
   Future setValue<T>(dynamic key, T value) async {
-    Log.d("Set LocalStorage：$key\r\n$value");
+    if (credentialKeys.contains(key)) {
+      if (value is! String) throw const FormatException('凭据必须为字符串');
+      final write = _credentialWrites.then((_) async {
+        await secureStorage.write(key: key as String, value: value);
+        _credentials[key] = value;
+        credentialChanges.add(key);
+      });
+      _credentialWrites = write.catchError((Object _) {});
+      return await write;
+    }
     return await settingsBox.put(key, value);
   }
 
   Future removeValue<T>(dynamic key) async {
-    Log.d("Remove LocalStorage：$key");
+    if (credentialKeys.contains(key)) return setValue(key, '');
     return await settingsBox.delete(key);
   }
 }

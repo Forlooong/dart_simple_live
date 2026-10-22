@@ -2,6 +2,7 @@ import 'package:simple_live_core/src/common/core_error.dart';
 import 'package:dio/dio.dart';
 
 import 'custom_interceptor.dart';
+import 'request_context.dart';
 
 class HttpClient {
   static HttpClient? _httpUtil;
@@ -34,6 +35,8 @@ class HttpClient {
     CancelToken? cancel,
   }) async {
     try {
+      RequestContext.current?.check();
+      cancel ??= RequestContext.current?.cancelToken;
       queryParameters ??= {};
       header ??= {};
       var result = await dio.get(
@@ -47,12 +50,9 @@ class HttpClient {
       );
       return result.data;
     } catch (e) {
-      if (e is DioException && e.type == DioExceptionType.badResponse) {
-        throw CoreError(e.message ?? "",
-            statusCode: e.response?.statusCode ?? 0);
-      } else {
-        throw CoreError("发送GET请求失败");
-      }
+      if (e is CoreError) rethrow;
+      if (e is DioException) throw CoreError.fromDio(e);
+      throw CoreError('平台响应格式异常', kind: CoreErrorKind.schemaChanged);
     }
   }
 
@@ -67,6 +67,8 @@ class HttpClient {
     CancelToken? cancel,
   }) async {
     try {
+      RequestContext.current?.check();
+      cancel ??= RequestContext.current?.cancelToken;
       queryParameters ??= {};
       header ??= {};
       var result = await dio.get(
@@ -80,12 +82,9 @@ class HttpClient {
       );
       return result.data;
     } catch (e) {
-      if (e is DioException && e.type == DioExceptionType.badResponse) {
-        throw CoreError(e.message ?? "",
-            statusCode: e.response?.statusCode ?? 0);
-      } else {
-        throw CoreError("发送GET请求失败");
-      }
+      if (e is CoreError) rethrow;
+      if (e is DioException) throw CoreError.fromDio(e);
+      throw CoreError('平台响应格式异常', kind: CoreErrorKind.schemaChanged);
     }
   }
 
@@ -103,6 +102,8 @@ class HttpClient {
     CancelToken? cancel,
   }) async {
     try {
+      RequestContext.current?.check();
+      cancel ??= RequestContext.current?.cancelToken;
       queryParameters ??= {};
       header ??= {};
       data ??= {};
@@ -120,12 +121,9 @@ class HttpClient {
       );
       return result.data;
     } catch (e) {
-      if (e is DioException && e.type == DioExceptionType.badResponse) {
-        throw CoreError(e.message ?? "",
-            statusCode: e.response?.statusCode ?? 0);
-      } else {
-        throw CoreError("发送POST请求失败");
-      }
+      if (e is CoreError) rethrow;
+      if (e is DioException) throw CoreError.fromDio(e);
+      throw CoreError('平台响应格式异常', kind: CoreErrorKind.schemaChanged);
     }
   }
 
@@ -140,6 +138,8 @@ class HttpClient {
     CancelToken? cancel,
   }) async {
     try {
+      RequestContext.current?.check();
+      cancel ??= RequestContext.current?.cancelToken;
       queryParameters ??= {};
       header ??= {};
       var result = await dio.head(
@@ -156,9 +156,10 @@ class HttpClient {
       if (e is DioException && e.type == DioExceptionType.badResponse) {
         //throw CoreError(e.message, statusCode: e.response?.statusCode ?? 0);
         return e.response!;
-      } else {
-        throw CoreError("发送HEAD请求失败");
       }
+      if (e is CoreError) rethrow;
+      if (e is DioException) throw CoreError.fromDio(e);
+      throw CoreError('平台响应格式异常', kind: CoreErrorKind.schemaChanged);
     }
   }
 }

@@ -59,6 +59,20 @@ external void JS_SetMaxStackSize(ffi.Pointer<JSRuntime> rt, int stackSize);
 @ffi.Native<ffi.Void Function(ffi.Pointer<JSRuntime>)>()
 external void JS_RunGC(ffi.Pointer<JSRuntime> rt);
 
+@ffi.Native<ffi.Void Function(ffi.Pointer<JSRuntime>)>()
+external void JS_UpdateStackTop(ffi.Pointer<JSRuntime> rt);
+
+@ffi.Native<ffi.Pointer<ffi.Void> Function(ffi.Pointer<JSRuntime>, ffi.Uint64)>()
+external ffi.Pointer<ffi.Void> sl_runtime_deadline(
+  ffi.Pointer<JSRuntime> rt, int milliseconds);
+
+@ffi.Native<ffi.Void Function(ffi.Pointer<JSRuntime>, ffi.Pointer<ffi.Void>)>()
+external void sl_runtime_clear_deadline(
+  ffi.Pointer<JSRuntime> rt, ffi.Pointer<ffi.Void> deadline);
+
+@ffi.Native<ffi.Int32 Function(ffi.Pointer<ffi.Void>)>()
+external int sl_runtime_timed_out(ffi.Pointer<ffi.Void> deadline);
+
 // ============================================================
 // Context functions
 // ============================================================

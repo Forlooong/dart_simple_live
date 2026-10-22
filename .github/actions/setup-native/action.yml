@@ -8,11 +8,26 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: dtolnay/rust-toolchain@1.90.0
+    - uses: dtolnay/rust-toolchain@7dcc700092a1a8b9c17ba0e140b4e34e93000946 # 1.90.0
       with:
+        toolchain: '1.90.0'
         targets: ${{ inputs.targets }}
     - name: Verify pinned Rust
       shell: bash
       run: |
         rustc --version
         cargo --version
+        {
+          echo '### Build tool versions'
+          flutter --version
+          dart --version 2>&1
+          rustc --version
+          cargo --version
+          if command -v java >/dev/null; then java -version 2>&1; fi
+          if command -v xcodebuild >/dev/null; then
+            test -z "${DEVELOPER_DIR:-}" || test -d "$DEVELOPER_DIR"
+            xcodebuild -version
+            xcrun --sdk macosx --show-sdk-version
+            xcrun --sdk iphoneos --show-sdk-version
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"

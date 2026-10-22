@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'package:flutter/widgets.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_core/simple_live_core.dart';
@@ -26,6 +27,8 @@ class FollowUserService extends BasePageController<FollowUser>
   var updating = false.obs;
   final _refreshQueue = StatusRefreshQueue();
   Future<void>? _refreshFuture;
+  final _refreshSeen = HashSet<FollowUser>.identity();
+  bool _refreshAutomatic = false;
   Worker? _concurrencyWorker;
   DateTime? _nextRefresh;
   bool _foreground = true;
@@ -62,6 +65,7 @@ class FollowUserService extends BasePageController<FollowUser>
     subscription = EventBus.instance.listen(Constant.kUpdateFollow, (_) {
       list.assignAll(DBService.instance.getFollowList());
       sortList();
+      if (_refreshFuture != null) _refreshQueue.add(_newRefreshTasks(list));
     });
     _concurrencyWorker = ever(
       AppSettingsController.instance.updateFollowThreadCount,
@@ -105,21 +109,24 @@ class FollowUserService extends BasePageController<FollowUser>
       if (_refreshQueue.isRunning) _nextRefresh = _now();
       _refreshQueue.pause();
     } else if (!wasForeground) {
-      unawaited(
-        (_refreshFuture ?? Future<void>.value()).whenComplete(_scheduleRefresh),
-      );
+      _refreshQueue.resume();
+      if (_refreshFuture != null) _nextRefresh = _now().add(_refreshInterval);
+      _scheduleRefresh();
     }
   }
 
   @override
   Future<void> refreshData({bool automatic = false}) {
     if (_closed || (automatic && !_foreground)) return Future.value();
-    if (_refreshFuture != null) return _refreshFuture!;
     currentPage = 2;
     list.assignAll(DBService.instance.getFollowList());
     pageEmpty.value = list.isEmpty;
     canLoadMore.value = false;
     sortList();
+    if (_refreshFuture != null) {
+      _refreshQueue.add(_newRefreshTasks(list));
+      return _refreshFuture!;
+    }
     if (!needUpdate) {
       needUpdate = true;
       return Future.value();
@@ -147,35 +154,34 @@ class FollowUserService extends BasePageController<FollowUser>
     if (_refreshFuture != null) return _refreshFuture!;
     updatedCount = 0;
     updating.value = true;
-    var completed = 0;
-    final snapshot = followList.toList();
-    final configurations = {
-      for (final item in snapshot)
-        item.siteId:
-            Sites.allSites[item.siteId]?.liveSite.statusConfigurationVersion,
-    };
+    _refreshSeen.clear();
+    _refreshAutomatic = automatic;
     _refreshQueue.concurrency = _concurrency;
-    final future = _refreshQueue.run(
-      snapshot.map(
-        (item) => () async {
-          if (_closed) return;
-          await updateLiveStatus(
-            item,
-            automatic: automatic,
-            configurationVersion: configurations[item.siteId],
-          );
-          if (!_closed) updatedCount = ++completed;
-        },
-      ),
-    );
+    if (!_foreground) _refreshQueue.pause();
+    final future = _refreshQueue.run(_newRefreshTasks(followList));
     _refreshFuture = future.whenComplete(() {
       _refreshFuture = null;
+      _refreshSeen.clear();
       if (!_closed) {
         sortList();
         updating.value = false;
       }
     });
     return _refreshFuture!;
+  }
+
+  Iterable<Future<void> Function()> _newRefreshTasks(
+    Iterable<FollowUser> members,
+  ) {
+    return [
+      for (final item in members)
+        if (_refreshSeen.add(item))
+          () async {
+            if (_closed) return;
+            await updateLiveStatus(item, automatic: _refreshAutomatic);
+            if (!_closed) updatedCount++;
+          },
+    ];
   }
 
   Future<void> updateLiveStatus(
@@ -210,7 +216,7 @@ class FollowUserService extends BasePageController<FollowUser>
       title: "取消关注",
     );
     if (!result) return;
-    await DBService.instance.followBox.delete(item.id);
+    await DBService.instance.deleteFollow(item.id);
     list.remove(item);
     livingList.remove(item);
     if (refresh) await refreshData();
@@ -218,8 +224,9 @@ class FollowUserService extends BasePageController<FollowUser>
 
   @override
   void onClose() {
+    if (_closed) return;
     _closed = true;
-    _refreshQueue.pause();
+    _refreshQueue.cancel();
     _concurrencyWorker?.dispose();
     WidgetsBinding.instance.removeObserver(this);
     updateTimer?.cancel();

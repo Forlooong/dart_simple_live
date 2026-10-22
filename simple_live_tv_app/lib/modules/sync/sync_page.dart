@@ -162,7 +162,7 @@ class SyncPage extends GetView<SyncController> {
                               Get.back();
                             },
                             child: QrImageView(
-                              data: SyncService.instance.ipAddress.value,
+                              data: SyncService.instance.pairingAddress,
                               version: QrVersions.auto,
                               backgroundColor: Colors.white,
                               padding: AppStyle.edgeInsetsA24,
@@ -197,7 +197,7 @@ class SyncPage extends GetView<SyncController> {
                         () => Visibility(
                           visible: SyncService.instance.httpRunning.value,
                           child: Text(
-                            "请扫描二维码或输入IP地址进行连接\n建立连接后可在APP端选择需要同步至TV端的数据",
+                            "请用新版客户端扫码，并在TV确认配对（10分钟有效）\n配对码：${SyncService.instance.pairingKey}",
                             style: AppStyle.textStyleWhite,
                             textAlign: TextAlign.center,
                           ),

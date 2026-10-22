@@ -2,72 +2,47 @@ import 'package:dio/dio.dart';
 
 import 'core_log.dart';
 
+/// Only fixed transport metadata enters logs. Headers, paths, query values,
+/// bodies, redirects and raw exception messages can all contain credentials.
 class CustomInterceptor extends Interceptor {
+  String _endpoint(RequestOptions options) {
+    final uri = options.uri;
+    return '${uri.scheme}://${uri.host}:${uri.port}';
+  }
+
+  int _elapsed(RequestOptions options) =>
+      (options.extra['core.requestClock'] as Stopwatch?)?.elapsedMilliseconds ??
+      0;
+
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
-    options.extra["ts"] = DateTime.now().millisecondsSinceEpoch;
-    if (CoreLog.requestLogType == RequestLogType.all) {
-      CoreLog.i(
-        '''[HTTP Request] [${options.method}]
-Request URL：${options.uri}
-Request Query：${options.queryParameters}
-Request Data：${options.data}
-Request Headers：${options.headers}''',
-      );
-    } else if (CoreLog.requestLogType == RequestLogType.short) {
-      CoreLog.i("[HTTP Request] [${options.method}] ${options.uri}");
+    options.extra['core.requestClock'] = Stopwatch()..start();
+    if (CoreLog.requestLogType != RequestLogType.none) {
+      CoreLog.i('[HTTP Request] [${options.method}] ${_endpoint(options)}');
     }
-
-    super.onRequest(options, handler);
+    handler.next(options);
   }
 
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) {
-    var time =
-        DateTime.now().millisecondsSinceEpoch - err.requestOptions.extra["ts"];
-    if (CoreLog.requestLogType == RequestLogType.all) {
-      CoreLog.e('''[HTTP Error] [${err.type}] [Time:${time}ms]
-${err.message}
-
-Request Method：${err.requestOptions.method}
-Response Code：${err.response?.statusCode}
-Request URL：${err.requestOptions.uri}
-Request Query：${err.requestOptions.queryParameters}
-Request Data：${err.requestOptions.data}
-Request Headers：${err.requestOptions.headers}
-Response Headers：${err.response?.headers.map}
-Response Data：${err.response?.data}''', err.stackTrace);
-    } else {
+    if (CoreLog.requestLogType != RequestLogType.none) {
       CoreLog.e(
-        "[HTTP Error] [${err.type}] [Time:${time}ms]\n[${err.response?.statusCode}] ${err.requestOptions.uri}",
-        err.stackTrace,
+        '[HTTP Error] [${err.type.name}] [${err.response?.statusCode}] '
+        '[${_elapsed(err.requestOptions)}ms] ${_endpoint(err.requestOptions)}',
+        StackTrace.empty,
       );
     }
-
-    super.onError(err, handler);
+    handler.next(err);
   }
 
   @override
   void onResponse(Response response, ResponseInterceptorHandler handler) {
-    var time = DateTime.now().millisecondsSinceEpoch -
-        response.requestOptions.extra["ts"];
-    if (CoreLog.requestLogType == RequestLogType.all) {
+    if (CoreLog.requestLogType != RequestLogType.none) {
       CoreLog.i(
-        '''[HTTP Response] [time:${time}ms]
-Request Method：${response.requestOptions.method}
-Request Code：${response.statusCode}
-Request URL：${response.requestOptions.uri}
-Request Query：${response.requestOptions.queryParameters}
-Request Data：${response.requestOptions.data}
-Request Headers：${response.requestOptions.headers}
-Response Headers：${response.headers.map}
-Response Data：${response.data}''',
-      );
-    } else if (CoreLog.requestLogType == RequestLogType.short) {
-      CoreLog.i(
-        "[HTTP Response] [time:${time}ms] [${response.statusCode}] ${response.requestOptions.uri}",
+        '[HTTP Response] [${response.statusCode}] '
+        '[${_elapsed(response.requestOptions)}ms] ${_endpoint(response.requestOptions)}',
       );
     }
-    super.onResponse(response, handler);
+    handler.next(response);
   }
 }

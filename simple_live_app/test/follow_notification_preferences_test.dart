@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
 import 'package:hive/hive.dart';
 import 'package:simple_live_app/models/db/follow_user.dart';
+import 'package:simple_live_app/models/db/follow_user_tag.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/follow_import.dart';
 import 'package:simple_live_app/services/follow_service.dart';
@@ -196,7 +197,10 @@ void main() {
       final box = await Hive.openBox<FollowUser>('follow');
       final existing = _follow(notifyLive: true)..tag = '全部';
       await box.put(existing.id, existing);
-      Get.put<DBService>(DBService()..followBox = box);
+      if (!Hive.isAdapterRegistered(3)) Hive.registerAdapter(FollowUserTagAdapter());
+      Get.put<DBService>(DBService()
+        ..followBox = box
+        ..tagBox = await Hive.openBox<FollowUserTag>('tags'));
       // Do not register the service: this exercises import/export without
       // starting the app's periodic live-status polling.
       final service = FollowService();

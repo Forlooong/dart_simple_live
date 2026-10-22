@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -62,13 +63,65 @@ class AppNavigator {
 
     // GetX onClose is synchronous; wait for any already-started teardown
     // before a new room acquires native/system resources.
-    await PlayerController.pendingCleanup;
+    if (!await waitForPlayerCleanup(PlayerController.pendingCleanup)) return;
     if (request != _liveRoomNavigationRequest) return;
     Get.toNamed(
       RoutePath.kLiveRoomDetail,
       arguments: site,
       parameters: {"roomId": roomId},
     );
+  }
+
+  /// Cancel only the navigation; never race native cleanup with another player.
+  static Future<bool>? _cleanupWait;
+
+  static Future<bool> waitForPlayerCleanup(Future<void> cleanup) {
+    return _cleanupWait ??= _waitForPlayerCleanup(cleanup).whenComplete(() {
+      _cleanupWait = null;
+    });
+  }
+
+  static Future<bool> _waitForPlayerCleanup(Future<void> cleanup) async {
+    final ready = Completer<bool>();
+    final timer = Timer(
+      const Duration(seconds: 2),
+      () => ready.complete(false),
+    );
+    cleanup.then((_) {
+      if (!ready.isCompleted) ready.complete(true);
+    });
+    final completed = await ready.future;
+    timer.cancel();
+    if (completed) return true;
+    final context = Get.context;
+    if (context == null || !context.mounted) return false;
+    return await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => FutureBuilder<void>(
+            future: cleanup,
+            builder: (context, state) {
+              if (state.connectionState == ConnectionState.done) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (dialogContext.mounted &&
+                      ModalRoute.of(dialogContext)?.isCurrent == true) {
+                    Navigator.of(dialogContext).pop(true);
+                  }
+                });
+              }
+              return AlertDialog(
+                title: const Text('正在关闭上一个播放器'),
+                content: const Text('播放器尚未完成资源释放。可以取消本次打开；若长时间没有完成，请重启应用后重试。'),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(dialogContext).pop(false),
+                    child: const Text('取消打开'),
+                  ),
+                ],
+              );
+            },
+          ),
+        ) ??
+        false;
   }
 
   /// 跳转至哔哩哔哩登录

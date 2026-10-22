@@ -1,3 +1,5 @@
+import 'package:simple_live_app/models/db/follow_user_tag.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -131,6 +133,7 @@ class _NativeEndpoints {
 }
 
 void main() {
+  setUp(() { FlutterSecureStorage.setMockInitialValues({}); });
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test('Workmanager wire tags match the pinned Android native codec', () {
@@ -173,8 +176,10 @@ void main() {
       if (!Hive.isAdapterRegistered(1)) {
         Hive.registerAdapter(FollowUserAdapter());
       }
+      if (!Hive.isAdapterRegistered(3)) Hive.registerAdapter(FollowUserTagAdapter());
       database = DBService()
-        ..followBox = await Hive.openBox<FollowUser>('notification_follows');
+        ..followBox = await Hive.openBox<FollowUser>('notification_follows')
+        ..tagBox = await Hive.openBox<FollowUserTag>('notification_tags');
       storage = LocalStorageService()
         ..settingsBox = await Hive.openBox<dynamic>('notification_settings');
       Get.put(database);
@@ -247,8 +252,7 @@ void main() {
       final generation = config.rooms.single.generation;
       native.nextRegistration = Completer<void>();
       final synchronized = native.nextRegistration!.future;
-      await storage.settingsBox
-          .put(LocalStorageService.kBilibiliCookie, 'updated cookie');
+      await storage.setValue(LocalStorageService.kBilibiliCookie, 'updated cookie');
       await synchronized.timeout(const Duration(seconds: 2));
       final updated = await snapshots.readConfig();
       expect(updated.rooms.single.generation, generation);

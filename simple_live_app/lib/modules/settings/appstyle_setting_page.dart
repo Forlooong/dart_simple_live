@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/app_style.dart';
@@ -17,6 +18,17 @@ class AppstyleSettingPage extends GetView<AppSettingsController> {
       body: ListView(
         padding: AppStyle.edgeInsetsA12,
         children: [
+          if (Platform.isAndroid)
+            SettingsCard(
+              child: Obx(
+                () => SettingsSwitch(
+                  value: controller.windowPaddingWorkaround.value,
+                  title: '小窗安全区兼容',
+                  subtitle: '仅在 Android 小窗模式上下留白异常时开启',
+                  onChanged: controller.setWindowPaddingWorkaround,
+                ),
+              ),
+            ),
           Padding(
             padding: AppStyle.edgeInsetsA12.copyWith(top: 0),
             child: Text(

@@ -1,5 +1,9 @@
 import 'dart:convert';
 
+import 'package:simple_live_core/src/common/core_error.dart';
+import 'package:simple_live_core/src/common/playback_response.dart';
+import 'package:simple_live_core/src/common/request_context.dart';
+
 import 'package:crypto/crypto.dart';
 import 'package:simple_live_core/src/common/convert_helper.dart';
 import 'package:simple_live_core/src/common/http_client.dart';
@@ -44,11 +48,22 @@ class BiliBiliSite extends LiveSite {
   String buvid3 = "";
   String buvid4 = "";
   String accessId = "";
+  Future<void>? _buvidLoading;
+
+  Future<void> _loadBuvid() async {
+    try {
+      final buvidInfo = await RequestContext().run(getBuvid);
+      buvid3 = buvidInfo['b_3'] ?? '';
+      buvid4 = buvidInfo['b_4'] ?? '';
+    } finally {
+      _buvidLoading = null;
+    }
+  }
+
   Future<Map<String, String>> getHeader() async {
-    if (buvid3.isEmpty) {
-      var buvidInfo = await getBuvid();
-      buvid3 = buvidInfo["b_3"] ?? "";
-      buvid4 = buvidInfo["b_4"] ?? "";
+    if (buvid3.isEmpty && !cookie.contains('buvid3=')) {
+      await (_buvidLoading ??= _loadBuvid());
+      RequestContext.current?.check();
     }
     return cookie.isEmpty
         ? {
@@ -144,19 +159,23 @@ class BiliBiliSite extends LiveSite {
       },
       header: await getHeader(),
     );
-    var qualitiesMap = <int, String>{};
-    for (var item in result["data"]["playurl_info"]["playurl"]["g_qn_desc"]) {
-      qualitiesMap[int.tryParse(item["qn"].toString()) ?? 0] =
-          item["desc"].toString();
+    final info = _playbackInfo(result);
+    final qualitiesMap = <int, String>{};
+    for (final value in playbackList(info['g_qn_desc'], id)) {
+      final item = playbackMap(value, id);
+      if (item['qn'] is! int || item['desc'] is! String) invalidPlayback(id);
+      qualitiesMap[item['qn']] = item['desc'];
     }
-
-    for (var item in result["data"]["playurl_info"]["playurl"]["stream"][0]
-        ["format"][0]["codec"][0]["accept_qn"]) {
-      var qualityItem = LivePlayQuality(
-        quality: qualitiesMap[item] ?? "未知清晰度",
-        data: item,
-      );
-      qualities.add(qualityItem);
+    for (final codec in _playbackCodecs(info)) {
+      final accepted = playbackList(codec['accept_qn'], id);
+      for (final qn in accepted) {
+        if (qn is! int) invalidPlayback(id);
+        qualities.add(LivePlayQuality(id: qn.toString(), quality: qualitiesMap[qn] ?? '未知清晰度', data: qn));
+      }
+      if (qualities.isNotEmpty) break;
+    }
+    if (qualities.isEmpty) {
+      throw CoreError('没有可用清晰度', kind: CoreErrorKind.noPlayableSource, site: id);
     }
     return qualities;
   }
@@ -178,30 +197,25 @@ class BiliBiliSite extends LiveSite {
       },
       header: await getHeader(),
     );
-    var streamList = result["data"]["playurl_info"]["playurl"]["stream"];
-    for (var streamItem in streamList) {
-      var formatList = streamItem["format"];
-      for (var formatItem in formatList) {
-        var codecList = formatItem["codec"];
-        for (var codecItem in codecList) {
-          var urlList = codecItem["url_info"];
-          var baseUrl = codecItem["base_url"].toString();
-          for (var urlItem in urlList) {
-            urls.add(
-              "${urlItem["host"]}$baseUrl${urlItem["extra"]}",
-            );
-          }
-        }
+    for (final codec in _playbackCodecs(_playbackInfo(result))) {
+      final baseUrl = codec['base_url'];
+      if (baseUrl is! String || baseUrl.isEmpty) invalidPlayback(id);
+      for (final value in playbackList(codec['url_info'], id)) {
+        final item = playbackMap(value, id);
+        if (item['host'] is! String || item['extra'] is! String) invalidPlayback(id);
+        urls.add(playbackUrl('${item["host"]}$baseUrl${item["extra"]}', id));
       }
     }
-    // 对链接进行排序，包含mcdn的在后
-    urls.sort((a, b) {
-      if (a.contains("mcdn")) {
-        return 1;
-      } else {
-        return -1;
-      }
-    });
+    if (urls.isEmpty) {
+      throw CoreError('没有可用播放线路', kind: CoreErrorKind.noPlayableSource, site: id);
+    }
+    // Stable partition: preserve the server order within each CDN class.
+    final ordinary = <String>[];
+    final mcdn = <String>[];
+    for (final url in urls) {
+      (Uri.parse(url).host.contains('mcdn') ? mcdn : ordinary).add(url);
+    }
+    urls = [...ordinary, ...mcdn];
     return LivePlayUrl(
       urls: urls,
       headers: {
@@ -210,6 +224,28 @@ class BiliBiliSite extends LiveSite {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36 Edg/115.0.1901.188"
       },
     );
+  }
+
+  Map _playbackInfo(dynamic result) {
+    final data = playbackData(result, id);
+    if (data['live_status'] == 0) {
+      throw CoreError('主播已下播', kind: CoreErrorKind.offline, site: id);
+    }
+    final info = data['playurl_info'];
+    if (info == null || (info is Map && info['playurl'] == null)) {
+      throw CoreError('没有可用播放线路', kind: CoreErrorKind.noPlayableSource, site: id);
+    }
+    return playbackMap(playbackMap(info, id)['playurl'], id);
+  }
+
+  Iterable<Map> _playbackCodecs(Map info) sync* {
+    for (final stream in playbackList(info['stream'], id)) {
+      for (final format in playbackList(playbackMap(stream, id)['format'], id)) {
+        for (final codec in playbackList(playbackMap(format, id)['codec'], id)) {
+          yield playbackMap(codec, id);
+        }
+      }
+    }
   }
 
   @override

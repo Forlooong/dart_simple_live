@@ -19,6 +19,26 @@ static uint64_t now_ms(void) {
 }
 #endif
 
+/* A runtime owns this native deadline until its interrupt handler is removed. */
+static int runtime_interrupt(JSRuntime *rt, void *opaque) {
+    (void)rt;
+    return now_ms() >= *(uint64_t *)opaque;
+}
+SL_EXPORT void *sl_runtime_deadline(JSRuntime *rt, uint64_t milliseconds) {
+    uint64_t *deadline = malloc(sizeof(*deadline));
+    if (!deadline) return NULL;
+    *deadline = now_ms() + milliseconds;
+    JS_SetInterruptHandler(rt, runtime_interrupt, deadline);
+    return deadline;
+}
+SL_EXPORT void sl_runtime_clear_deadline(JSRuntime *rt, void *deadline) {
+    JS_SetInterruptHandler(rt, NULL, NULL);
+    free(deadline);
+}
+SL_EXPORT int sl_runtime_timed_out(void *deadline) {
+    return deadline && now_ms() >= *(uint64_t *)deadline;
+}
+
 SL_EXPORT JSValue SL_NewString16(JSContext *ctx, const uint16_t *data, int length);
 typedef struct {
     JSRuntime *rt;

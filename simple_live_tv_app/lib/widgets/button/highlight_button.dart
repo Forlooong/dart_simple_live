@@ -34,7 +34,7 @@ class HighlightButton extends StatelessWidget {
         autofocus: autofocus,
         selected: selected,
         child: Container(
-          height: 64.w,
+          constraints: BoxConstraints(minHeight: 64.w),
           //width: 64.w,
           padding: AppStyle.edgeInsetsH24,
           decoration: BoxDecoration(

@@ -400,4 +400,238 @@ void main() {
       expect(database.tagBox.get(alpha.id)!.userId, ['saved']);
     },
   );
+  FollowUser follow(String id, {String name = '全部'}) => FollowUser(
+    id: 'douyu_$id',
+    roomId: id,
+    siteId: 'douyu',
+    userName: id,
+    face: '',
+    addTime: DateTime(2026),
+    tag: name,
+  );
+
+  test(
+    'invalid later import record preserves follows, tags and order',
+    () async {
+      final original = await database.addFollowTag('Original');
+      final user = follow('1');
+      await database.addFollow(user);
+      await expectLater(
+        database.importSnapshot(
+          follows: [follow('2').toJson()],
+          tags: [
+            tag('new', 'New').toJson(),
+            {'id': 'broken'},
+          ],
+          replace: true,
+        ),
+        throwsA(anything),
+      );
+      expect(database.getFollowList().single.id, user.id);
+      expect(database.getFollowTagList().single.id, original.id);
+    },
+  );
+
+  test(
+    'import restores incoming order and reconciles memberships together',
+    () async {
+      await database.importSnapshot(
+        follows: [follow('1').toJson()],
+        tags: [
+          tag('a', 'A', ['douyu_1']).toJson(),
+          tag('b', 'B').toJson(),
+        ],
+        replace: true,
+      );
+      await database.importTags([
+        tag('b', 'B', ['douyu_1']).toJson(),
+        tag('a', 'A').toJson(),
+      ], replace: true);
+      await restart();
+      expect(database.getFollowTagList().map((tag) => tag.id), ['b', 'a']);
+      expect(database.getFollowList().single.tag, 'B');
+      await database.importTags([], replace: true);
+      expect(database.getFollowTagList(), isEmpty);
+      expect(database.getFollowList().single.tag, '全部');
+    },
+  );
+
+  for (final operation in [
+    'snapshot.follows',
+    'snapshot.tags',
+    'snapshot.removeFollows',
+    'snapshot.removeTags',
+    'snapshot.flushFollows',
+    'snapshot.flushTags',
+    'snapshot.commit',
+    'snapshot.finish',
+  ]) {
+    test('import rolls back $operation failure and survives restart', () async {
+      await database.importSnapshot(
+        follows: [follow('1').toJson()],
+        tags: [
+          tag('old', 'Old', ['douyu_1']).toJson(),
+        ],
+        replace: true,
+      );
+      var fail = true;
+      database = await openDatabase(
+        beforeTagWrite: (op, _) {
+          if (fail && op == operation) {
+            fail = false;
+            throw StateError('injected write failure');
+          }
+        },
+      );
+      await expectLater(
+        database.importSnapshot(
+          follows: [follow('2').toJson()],
+          tags: [
+            tag('new', 'New', ['douyu_2']).toJson(),
+          ],
+          replace: true,
+        ),
+        throwsStateError,
+      );
+      expect(database.getFollowList().single.id, 'douyu_1');
+      expect(database.getFollowTagList().single.id, 'old');
+      await restart();
+      expect(database.getFollowList().single.tag, 'Old');
+      expect(database.getFollowTagList().single.userId, ['douyu_1']);
+    });
+  }
+
+  test('uncompleted rollback is replayed on next startup', () async {
+    await database.importSnapshot(
+      follows: [follow('1').toJson()],
+      tags: [
+        tag('old', 'Old', ['douyu_1']).toJson(),
+      ],
+      replace: true,
+    );
+    database = await openDatabase(
+      beforeTagWrite: (operation, _) {
+        if (operation == 'snapshot.tags') throw StateError('disk unavailable');
+      },
+    );
+    await expectLater(
+      database.importSnapshot(
+        follows: [follow('2').toJson()],
+        tags: [tag('new', 'New').toJson()],
+        replace: true,
+      ),
+      throwsStateError,
+    );
+    expect(getMetadata().containsKey('pendingSnapshot'), isTrue);
+    await restart();
+    expect(database.getFollowList().single.id, 'douyu_1');
+    expect(database.getFollowTagList().single.userId, ['douyu_1']);
+  });
+
+  test(
+    'queued move and delete resolve orphan names without resurrecting follows',
+    () async {
+      final destination = await database.addFollowTag('Destination');
+      await database.addFollow(follow('1', name: 'Missing'));
+      await database.moveFollow('douyu_1', destination.id);
+      expect(database.getFollowList().single.tag, 'Destination');
+      await database.deleteFollow('douyu_1');
+      expect(database.getFollowList(), isEmpty);
+      expect(database.getFollowTagList().single.userId, isEmpty);
+    },
+  );
+
+  test(
+    'legacy follows-only import creates a consistent category once',
+    () async {
+      await database.importFollows([
+        follow('1', name: 'Legacy').toJson(),
+        follow('2', name: 'Legacy').toJson(),
+      ], replace: true);
+      expect(database.getFollowTagList().single.tag, 'Legacy');
+      expect(database.getFollowTagList().single.userId, ['douyu_1', 'douyu_2']);
+    },
+  );
+
+  test(
+    'rename command retains memberships changed after the UI snapshot',
+    () async {
+      final a = await database.addFollowTag('A');
+      final b = await database.addFollowTag('B');
+      await database.addFollow(follow('1'));
+      await database.moveFollow('douyu_1', a.id);
+      await database.moveFollow('douyu_1', b.id);
+      await database.renameFollowTag(a.id, 'Renamed');
+      expect(database.getFollowList().single.tag, 'B');
+      expect(database.getFollowTagList().first.userId, isEmpty);
+      expect(database.getFollowTagList().last.userId, ['douyu_1']);
+    },
+  );
+  for (final failImport in [false, true]) {
+    test(
+      'notification opt-out waits for import ${failImport ? "rollback" : "commit"}',
+      () async {
+        final original = follow('1')..notifyLive = true;
+        await database.addFollow(original);
+        final started = Completer<void>();
+        final release = Completer<void>();
+        var firstWrite = true;
+        database = await openDatabase(
+          beforeTagWrite: (operation, _) async {
+            if (operation == 'snapshot.follows' && firstWrite) {
+              firstWrite = false;
+              started.complete();
+              await release.future;
+              if (failImport) throw StateError('injected import failure');
+            }
+          },
+        );
+        final importing = database.importFollows([
+          {...original.toJson(), 'userName': 'Imported'},
+        ], replace: true);
+        final finishedImport = failImport
+            ? expectLater(importing, throwsStateError)
+            : importing;
+        await started.future;
+        var changed = false;
+        final optOut = database.setFollowNotification(original.id, false).then((
+          _,
+        ) {
+          changed = true;
+        });
+        await Future<void>.delayed(Duration.zero);
+        expect(changed, isFalse);
+        release.complete();
+        await finishedImport;
+        await optOut;
+        expect(database.followBox.get(original.id)!.notifyLive, isFalse);
+        expect(original.notifyLive, isTrue);
+        await restart();
+        expect(database.followBox.get(original.id)!.notifyLive, isFalse);
+      },
+    );
+  }
+
+  test(
+    'notification rollback cannot override a later import or toggle',
+    () async {
+      final original = follow('1');
+      await database.addFollow(original);
+      final change = await database.setFollowNotification(original.id, true);
+      await database.importFollows([
+        {...original.toJson(), 'userName': 'Imported', 'notifyLive': true},
+      ], replace: true);
+      await database.rollbackFollowNotification(change.saved, change.previous);
+      expect(database.followBox.get(original.id)!.notifyLive, isTrue);
+      expect(database.followBox.get(original.id)!.userName, 'Imported');
+      final off = await database.setFollowNotification(original.id, false);
+      await database.setFollowNotification(original.id, true);
+      await database.setFollowNotification(original.id, false);
+      await database.rollbackFollowNotification(off.saved, off.previous);
+      expect(database.followBox.get(original.id)!.notifyLive, isFalse);
+      await database.deleteFollow(original.id);
+      await database.rollbackFollowNotification(change.saved, change.previous);
+      expect(database.followBox.containsKey(original.id), isFalse);
+    },
+  );
 }

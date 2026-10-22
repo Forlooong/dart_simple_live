@@ -110,13 +110,6 @@ class MyApp extends StatelessWidget {
                 ),
               ),
             ),
-            //字体大小不跟随系统变化
-            builder: (context, child) => MediaQuery(
-              data: MediaQuery.of(context).copyWith(
-                textScaler: const TextScaler.linear(1.0),
-              ),
-              child: child!,
-            ),
           ),
         );
       },

@@ -236,20 +236,22 @@ class AppSettingsController extends GetxController {
   }
 
   RxSet<String> shieldList = <String>{}.obs;
-  void addShieldList(String e) {
-    shieldList.add(e);
-    LocalStorageService.instance.shieldBox.put(e, e);
+  Future<void> importShieldRules(Iterable<dynamic> data,
+      {required bool replace}) async {
+    final next = await LocalStorageService.instance.updateShieldRules(
+        data, replace: replace);
+    shieldList.assignAll(next);
   }
 
-  void removeShieldList(String e) {
-    shieldList.remove(e);
-    LocalStorageService.instance.shieldBox.delete(e);
+  Future<void> addShieldList(String e) => importShieldRules([e], replace: false);
+
+  Future<void> removeShieldList(String e) async {
+    final next = await LocalStorageService.instance.updateShieldRules(
+        const [], replace: false, remove: e);
+    shieldList.assignAll(next);
   }
 
-  Future clearShieldList() async {
-    shieldList.clear();
-    await LocalStorageService.instance.shieldBox.clear();
-  }
+  Future<void> clearShieldList() => importShieldRules(const [], replace: true);
 
   void setScaleMode(int value) {
     scaleMode.value = value;

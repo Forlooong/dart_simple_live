@@ -49,6 +49,12 @@ class _DelayedOrderDB extends DBService {
   }
 
   @override
+  Future<void> renameFollowTag(String id, String name) async {
+    await updateGate?.future;
+    await super.renameFollowTag(id, name);
+  }
+
+  @override
   Future<void> updateFollowTagOrder(List<FollowUserTag> tags) async {
     await orderGate?.future;
     await super.updateFollowTagOrder(tags);

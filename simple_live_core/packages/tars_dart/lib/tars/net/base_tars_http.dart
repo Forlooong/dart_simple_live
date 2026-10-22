@@ -17,7 +17,7 @@ class BaseTarsHttp {
   final String servantName;
   final Map<String, String> headers;
 
-  var timeOut = 60000;
+  final Duration timeout;
   var debugLog = false;
   late final Dio dio;
   final logger = Logger();
@@ -26,28 +26,27 @@ class BaseTarsHttp {
     this.baseUrl,
     this.servantName, {
     this.path = "",
-    this.timeOut = 60000,
+    this.timeout = const Duration(seconds: 20),
     this.debugLog = false,
     this.headers = const {},
   }) {
     dio = Dio(BaseOptions(
-        connectTimeout: Duration(seconds: timeOut),
+        connectTimeout: timeout,
+        sendTimeout: timeout,
+        receiveTimeout: timeout,
         baseUrl: baseUrl,
         responseType: ResponseType.bytes,
         headers: {
           HttpHeaders.contentTypeHeader: "application/x-wup",
           ...headers
         }));
-    if (debugLog) {
-      dio.interceptors.add(LogInterceptor(responseBody: false)); //开启请求日志
-    }
   }
 
   //发送http请求,不返回状态码,异常状态码直接抛出异常TupResultException
   Future<RSP> tupRequest<REQ, RSP>(
-      String methodName, REQ tReq, RSP tRsp) async {
+      String methodName, REQ tReq, RSP tRsp, {CancelToken? cancelToken}) async {
     TupResponse<RSP> response =
-        await tupRequestWithRspCode(methodName, tReq, tRsp);
+        await tupRequestWithRspCode(methodName, tReq, tRsp, cancelToken: cancelToken);
     if (response.code == 0) {
       return response.response!;
     } else {
@@ -58,13 +57,14 @@ class BaseTarsHttp {
 
   //发送http请求,返回状态码及response
   Future<TupResponse<RSP>> tupRequestWithRspCode<REQ, RSP>(
-      String methodName, REQ tReq, RSP tRsp) async {
+      String methodName, REQ tReq, RSP tRsp, {CancelToken? cancelToken}) async {
     final data = buildRequest(methodName, tReq);
-    dio.options.headers[HttpHeaders.contentLengthHeader] = data.lengthInBytes;
-    logger.d("send tupRequest, methodName:$methodName");
+    if (debugLog) logger.d("send tupRequest, methodName:$methodName");
     final result = await dio.post<List<int>>(
       path,
-      data: Stream.fromIterable(data.map((e) => [e])),
+      data: Stream.value(data),
+      options: Options(headers: {HttpHeaders.contentLengthHeader: data.lengthInBytes}),
+      cancelToken: cancelToken,
     );
     final value = result.data;
     return tupResponseDecode(methodName, value!, tRsp);
@@ -72,22 +72,24 @@ class BaseTarsHttp {
 
   //发送无response http请求,返回状态码
   Future<TupResponse<void>> tupRequestWithRspCodeNoRsp<REQ>(
-      String methodName, REQ tReq) async {
+      String methodName, REQ tReq, {CancelToken? cancelToken}) async {
     final data = buildRequest(methodName, tReq);
-    dio.options.headers[HttpHeaders.contentLengthHeader] = data.lengthInBytes;
-    logger.d("send tupRequestNoRsp, methodName:$methodName");
+    if (debugLog) logger.d("send tupRequestNoRsp, methodName:$methodName");
     final result = await dio.post<List<int>>(
       path,
-      data: Stream.fromIterable(data.map((e) => [e])),
+      data: Stream.value(data),
+      options: Options(headers: {HttpHeaders.contentLengthHeader: data.lengthInBytes}),
+      cancelToken: cancelToken,
     );
     final value = result.data;
     return tupEmptyResponseDecode(methodName, value!);
   }
 
   //发送无response http请求,不返回状态码,异常状态码直接抛出异常TupResultException
-  Future<void> tupRequestNoRsp<REQ>(String methodName, REQ tReq) async {
+  Future<void> tupRequestNoRsp<REQ>(String methodName, REQ tReq,
+      {CancelToken? cancelToken}) async {
     TupResponse<void> response =
-        await tupRequestWithRspCodeNoRsp(methodName, tReq);
+        await tupRequestWithRspCodeNoRsp(methodName, tReq, cancelToken: cancelToken);
     if (response.code == 0) {
       return;
     } else {
@@ -115,11 +117,11 @@ class BaseTarsHttp {
     var bytes = Uint8List.fromList(list);
     BinaryReader br = BinaryReader(bytes);
     int size = br.readInt(4);
-    logger.d("size:$size");
+    if (debugLog) logger.d("size:$size");
     TarsUniPacket respPack = TarsUniPacket();
     respPack.decode(bytes);
     var code = respPack.get("", 0);
-    logger.d("get tupRequest response, methodName:$methodName, code:$code");
+    if (debugLog) logger.d("get tupRequest response, methodName:$methodName, code:$code");
     RSP rsp = respPack.get<RSP>("tRsp", tRsp);
     return TupResponse<RSP>(code: code, response: rsp);
   }
@@ -129,11 +131,11 @@ class BaseTarsHttp {
     var bytes = Uint8List.fromList(list);
     BinaryReader br = BinaryReader(bytes);
     int size = br.readInt(4);
-    logger.d("size:$size");
+    if (debugLog) logger.d("size:$size");
     TarsUniPacket respPack = TarsUniPacket();
     respPack.decode(bytes);
     var code = respPack.get("", 0);
-    logger.d("get tupRequest response, methodName:$methodName, code:$code");
+    if (debugLog) logger.d("get tupRequest response, methodName:$methodName, code:$code");
     return TupResponse<void>(code: code);
   }
 }

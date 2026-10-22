@@ -27,7 +27,7 @@ import 'package:simple_live_app/modules/live_room/player/playback_diagnostics.da
 mixin PlayerMixin {
   final playbackDiagnostics = PlaybackDiagnostics();
   final _playerCommands = PlayerCommandQueue(
-    onError: (error, stack) => Log.e(error.toString(), stack),
+    onError: (error, stack) => Log.e('播放器命令失败：${error.runtimeType}', stack),
   );
 
   bool get playerClosing => _playerCommands.isClosing;
@@ -729,7 +729,7 @@ class PlayerController extends BaseController
     if (playerClosing) return;
     _errorSubscription = player.stream.error.listen((event) {
       if (playerClosing) return;
-      Log.d("播放器错误：$event");
+      Log.d("播放器错误事件");
       // 跳过无音频输出的错误
       // Could not open/initialize audio device -> no sound.
       if (event.contains('no sound.')) {
@@ -765,7 +765,7 @@ class PlayerController extends BaseController
     });
     _logSubscription = player.stream.log.listen((event) {
       if (playerClosing) return;
-      Log.d("播放器日志：$event");
+      // Native messages may contain signed source URLs; keep them out of logs.
     });
     _widthSubscription = player.stream.width.listen((event) {
       if (playerClosing) return;
