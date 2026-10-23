@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:simple_live_app/services/app_update_service.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -59,6 +60,7 @@ void main() async {
   );
   SystemChrome.setSystemUIOverlayStyle(systemUiOverlayStyle);
   runApp(const MyApp());
+  WidgetsBinding.instance.addPostFrameCallback((_) => AppUpdateService.check(automatic: true));
   WidgetsBinding.instance.addPostFrameCallback((_) {
     LiveNotificationService.instance.markNavigationReady();
   });

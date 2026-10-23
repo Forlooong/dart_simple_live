@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:simple_live_app/services/app_update_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
@@ -241,6 +242,18 @@ class MinePage extends StatelessWidget {
                     color: Colors.grey,
                   ),
                   onTap: Utils.showStatement,
+                ),
+                ListTile(
+                  leading: const Icon(Icons.system_update),
+                  title: const Text('检查更新'),
+                  onTap: () => AppUpdateService.check(),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.description_outlined),
+                  title: const Text('开源许可证'),
+                  onTap: () => showLicensePage(context: context,
+                    applicationName: 'Simple Live · Forlooong fork',
+                    applicationLegalese: '基于 xiaoyaocz/dart_simple_live 的非官方修改版，遵循 GPLv3。原作者不为本分支提供支持。'),
                 ),
                 ListTile(
                   leading: const Icon(Remix.github_line),

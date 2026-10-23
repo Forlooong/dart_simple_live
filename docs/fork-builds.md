@@ -3,7 +3,45 @@
 One workflow, `Build installers` (`installers.yml`), runs on
 `master` pushes or manually. Its six independent jobs build Android, Android TV,
 iOS, macOS, Windows and Linux. A failed platform does not prevent the other jobs
-from completing. No tags or GitHub Releases are created.
+from completing. Installer builds do not create tags or GitHub Releases.
+
+## Manual publication and application updates
+
+The separate `Prepare or publish update` workflow accepts a successful `Build
+installers` run ID from this repository's `master` branch. All six jobs must pass
+in the same attempt. It checks the ten installer artifacts against their GitHub
+SHA-256 digests and rechecks APK signatures, package IDs, ABI and versions. Select
+`publish: false` first to inspect the review artifact. Select `publish: true` only
+after reviewing the packages, licenses and source. Publication creates a draft,
+uploads all files, and then makes it the latest release. An existing release/tag
+is never overwritten; failed uploads leave a draft for investigation.
+
+Published files include `update.json`, installers, the GPL text, a corresponding
+source archive, third-party notices and checksums. The source archive is tied to
+the built commit. It does not by itself establish complete third-party license
+compliance or native dependency source obligations. The maintainer is responsible
+for the authorization review; neither the workflow nor a disclaimer grants rights.
+
+Main and TV check this fork's latest published `update.json` after startup, at
+most once per day, and provide manual checks from Mine / Settings → Version.
+Users can install, postpone or ignore a version. Manual checks bypass the ignored
+version. Downloads start only on confirmation, support cancellation and verify
+size and SHA-256 before installation. Android/TV match the installed process ABI,
+certificate, package ID, SDK and increasing actual versionCode; the system
+installer confirms installation. Permission denial opens the source-install
+settings; after authorization, check again. No uninstall or data clearing occurs.
+Windows opens the downloaded Setup EXE; macOS opens DMG; Linux opens DEB through
+the system handler. Users finish installation and restart the app themselves.
+iOS shows the new version and opens the release page; unsigned IPA is never
+presented as directly installable. Unreachable GitHub or missing desktop file
+handlers are reported during manual checks. No mirror, embedded token, background
+download, forced update or telemetry is used.
+
+Existing installations need one manual same-signer update to this implementation
+before app-driven updating is available. The first update feed exists only after
+manually publishing a newly verified build; HTTP 404 means no update is published,
+not a successful latest-version check. Device upgrade/runtime validation remains
+required before claiming a tested end-to-end update.
 
 ## Version source of truth
 

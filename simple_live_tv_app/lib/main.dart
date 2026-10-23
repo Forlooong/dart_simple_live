@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:simple_live_tv_app/services/app_update_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -37,6 +38,7 @@ void main() async {
   // 全屏
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
   runApp(const MyApp());
+  WidgetsBinding.instance.addPostFrameCallback((_) => AppUpdateService.check(automatic: true));
 }
 
 Future initServices() async {

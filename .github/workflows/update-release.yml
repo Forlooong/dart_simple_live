@@ -1,0 +1,79 @@
+name: Prepare or publish update
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful master Build installers run ID (all six platforms)
+        required: true
+        type: string
+      publish:
+        description: Publish publicly after reviewing source, licenses and artifacts
+        type: boolean
+        default: false
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: manual-update-release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Require this fork and master branch
+        env:
+          EVENT_REPOSITORY: ${{ github.repository }}
+          EVENT_REF: ${{ github.ref }}
+        run: |
+          test "$EVENT_REPOSITORY" = Forlooong/dart_simple_live
+          test "$EVENT_REF" = refs/heads/master
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Select immutable build source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq .head_sha)
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          git checkout --detach "$sha"
+      - name: Prepare verified installers and update manifest
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)
+          python -B tool/prepare_update_release.py "$RUN_ID" --output "$RUNNER_TEMP/update-release" \
+            --apksigner "$apksigner" --aapt2 "$(dirname "$apksigner")/aapt2"
+      - name: Upload reviewable release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: update-release-review
+          path: |
+            ${{ runner.temp }}/update-release/*
+            ${{ runner.temp }}/release-notes.md
+          retention-days: 14
+      - name: Publish complete release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.prepare.outputs.tag }}
+          SOURCE_SHA: ${{ steps.prepare.outputs.sha }}
+        run: |
+          # Never overwrite or silently replace an existing release/tag.
+          if gh release view "$TAG" >/dev/null 2>&1 || git ls-remote --exit-code origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo 'This version already has a release or tag; refusing replacement.' >&2
+            exit 1
+          fi
+          gh release create "$TAG" --target "$SOURCE_SHA" --draft \
+            --title "Simple Live fork $TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
+          gh release upload "$TAG" "$RUNNER_TEMP/update-release/"*
+          python -B tool/prepare_update_release.py --verify-tag "$TAG" --output "$RUNNER_TEMP/update-release"
+          gh release edit "$TAG" --draft=false --latest

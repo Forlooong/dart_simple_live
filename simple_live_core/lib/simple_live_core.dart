@@ -1,5 +1,7 @@
 library simple_live_core;
 
+export 'src/common/app_update.dart';
+
 export 'src/common/sync_session.dart';
 
 export 'src/interface/live_site.dart';

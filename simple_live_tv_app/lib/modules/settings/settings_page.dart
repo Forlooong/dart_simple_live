@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:simple_live_tv_app/services/app_update_service.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
@@ -484,7 +485,14 @@ class SettingsPage extends GetView<SettingsController> {
           focusNode: controller.versionFocusNode,
           title: "版本",
           subtitle: "v${Utils.packageInfo.version}",
-          onTap: ()=>{},
+          onTap: () => AppUpdateService.check(),
+        ),
+        HighlightListTile(
+          focusNode: controller.licenseFocusNode,
+          title: '开源许可证 · 非官方 fork',
+          onTap: () => showLicensePage(context: Get.context!,
+            applicationName: 'Simple Live TV · Forlooong fork',
+            applicationLegalese: '基于 xiaoyaocz/dart_simple_live 的修改版，遵循 GPLv3。原作者不为本分支提供支持。'),
         ),
       ],
     );

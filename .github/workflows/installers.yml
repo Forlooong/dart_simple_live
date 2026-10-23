@@ -1,5 +1,5 @@
 name: Build installers
-run-name: "Build all platforms · Main 1.12.22+11123 · TV 1.7.13+10618 · #${{ github.run_number }}"
+run-name: "Build all platforms · Main 1.12.23+11124 · TV 1.7.14+10619 · #${{ github.run_number }}"
 
 on:
   push:
@@ -879,7 +879,7 @@ jobs:
           Section: video
           Priority: optional
           Architecture: amd64
-          Maintainer: xiaoyaocz <xiaoyaocz@52uwp.com>
+          Maintainer: Forlooong
           Installed-Size: $installed_size
           Depends: libc6 (>= 2.35), libstdc++6, libgtk-3-0, libmpv1, libasound2, libsecret-1-0, libjsoncpp25
           Description: Simple Live desktop live stream player
