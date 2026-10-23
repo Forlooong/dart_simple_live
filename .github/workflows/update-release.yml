@@ -22,7 +22,8 @@ concurrency:
   cancel-in-progress: false
 jobs:
   release:
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.event.head_commit.message == 'ci: publish verified build 39887888106')
+    if: >-
+      github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.event.head_commit.message == 'ci: publish verified build 39887888106')
     runs-on: ubuntu-22.04
     permissions:
       contents: write
