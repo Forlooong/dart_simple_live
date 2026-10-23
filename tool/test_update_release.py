@@ -8,7 +8,7 @@ from prepare_update_release import JOBS, TARGETS, validate_run, verify_uploaded,
 
 class UpdateReleaseTest(unittest.TestCase):
     def test_build_tools_minimum_sdk_spacing(self):
-        for row in ("sdkVersion:'24'", "sdkVersion: '24'", "  sdkVersion: '24'\r\n"):
+        for row in ("sdkVersion:'24'", "sdkVersion: '24'", "  sdkVersion: '24'\r\n", "minSdkVersion:'24'"):
             self.assertEqual(minimum_sdk(row), 24)
         with self.assertRaises(ValueError):
             minimum_sdk("targetSdkVersion:'36'")

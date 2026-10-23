@@ -33,8 +33,8 @@ def version(root, app):
 
 
 def minimum_sdk(badging):
-    match = re.search(r"^\s*sdkVersion:\s*'(\d+)'", badging, re.M)
-    require(match is not None, 'Missing Android minimum SDK')
+    match = re.search(r"^\s*(?:sdkVersion|minSdkVersion):\s*'(\d+)'", badging, re.M)
+    require(match is not None, 'Missing Android minimum SDK; manifest report: ' + badging[:4096])
     return int(match[1])
 
 
