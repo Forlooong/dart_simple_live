@@ -52,7 +52,7 @@ jobs:
           sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq .head_sha)
           [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
           git worktree add --detach "$RUNNER_TEMP/update-source" "$sha"
-      - name: Prepare verified installers and update manifest
+      - name: Prepare verified installers and update manifest (SDK metadata checked)
         id: prepare
         env:
           GH_TOKEN: ${{ github.token }}
