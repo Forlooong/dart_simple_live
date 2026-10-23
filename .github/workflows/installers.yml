@@ -4,6 +4,10 @@ run-name: "Build all platforms · Main 1.12.23+11124 · TV 1.7.14+10619 · #${{ 
 on:
   push:
     branches: [master]
+    paths-ignore:
+      - .github/workflows/update-release.yml
+      - tool/prepare_update_release.py
+      - tool/test_update_release.py
   workflow_dispatch:
 
 permissions:

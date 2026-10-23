@@ -1,5 +1,8 @@
 name: Prepare or publish update
 on:
+  push:
+    branches: [master]
+    paths: [.github/workflows/update-release.yml]
   # One explicitly authorized publication; later versions remain manual.
   workflow_run:
     workflows: [Build installers, Prepare or publish update]
@@ -23,7 +26,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   release:
-    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.id == 39887888106 && github.event.workflow_run.conclusion == 'success') || (github.event.workflow_run.id == 39889608207 && github.event.workflow_run.conclusion == 'failure')
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.event.head_commit.message == 'ci: publish verified build 39887888106')
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -71,7 +74,7 @@ jobs:
             ${{ runner.temp }}/release-notes.md
           retention-days: 14
       - name: Publish complete release
-        if: inputs.publish || github.event_name == 'workflow_run'
+        if: inputs.publish || github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.prepare.outputs.tag }}
