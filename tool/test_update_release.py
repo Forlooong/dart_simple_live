@@ -3,10 +3,16 @@ import copy
 import unittest
 from pathlib import Path
 import tempfile
-from prepare_update_release import JOBS, TARGETS, validate_run, verify_uploaded, sha
+from prepare_update_release import JOBS, TARGETS, validate_run, verify_uploaded, sha, minimum_sdk
 
 
 class UpdateReleaseTest(unittest.TestCase):
+    def test_build_tools_minimum_sdk_spacing(self):
+        for row in ("sdkVersion:'24'", "sdkVersion: '24'", "  sdkVersion: '24'\r\n"):
+            self.assertEqual(minimum_sdk(row), 24)
+        with self.assertRaises(ValueError):
+            minimum_sdk("targetSdkVersion:'36'")
+
     def setUp(self):
         self.run = {'repository': {'full_name': 'Forlooong/dart_simple_live'},
             'head_repository': {'full_name': 'Forlooong/dart_simple_live'},

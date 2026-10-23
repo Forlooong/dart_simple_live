@@ -2,7 +2,7 @@ name: Prepare or publish update
 on:
   # One explicitly authorized publication; later versions remain manual.
   workflow_run:
-    workflows: [Build installers]
+    workflows: [Build installers, Prepare or publish update]
     types: [completed]
     branches: [master]
   workflow_dispatch:
@@ -23,7 +23,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   release:
-    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.id == 39887888106 && github.event.workflow_run.conclusion == 'success')
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.id == 39887888106 && github.event.workflow_run.conclusion == 'success') || (github.event.workflow_run.id == 39889608207 && github.event.workflow_run.conclusion == 'failure')
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -46,20 +46,21 @@ jobs:
       - name: Select immutable build source
         env:
           GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
+          RUN_ID: ${{ inputs.run_id || '39887888106' }}
         run: |
           [[ "$RUN_ID" =~ ^[0-9]+$ ]]
           sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq .head_sha)
           [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
-          git checkout --detach "$sha"
+          git worktree add --detach "$RUNNER_TEMP/update-source" "$sha"
       - name: Prepare verified installers and update manifest
         id: prepare
         env:
           GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
+          RUN_ID: ${{ inputs.run_id || '39887888106' }}
         run: |
           apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)
           python -B tool/prepare_update_release.py "$RUN_ID" --output "$RUNNER_TEMP/update-release" \
+            --source "$RUNNER_TEMP/update-source" \
             --apksigner "$apksigner" --aapt2 "$(dirname "$apksigner")/aapt2"
       - name: Upload reviewable release files
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

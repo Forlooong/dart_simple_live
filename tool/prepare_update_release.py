@@ -32,6 +32,12 @@ def version(root, app):
     return match[1], int(match[2])
 
 
+def minimum_sdk(badging):
+    match = re.search(r"^\s*sdkVersion:\s*'(\d+)'", badging, re.M)
+    require(match is not None, 'Missing Android minimum SDK')
+    return int(match[1])
+
+
 def validate_run(run, jobs):
     require(run['repository']['full_name'] == REPOSITORY and
             run['head_repository']['full_name'] == REPOSITORY and
@@ -62,6 +68,7 @@ def main():
     parser.add_argument('--apksigner')
     parser.add_argument('--aapt2')
     parser.add_argument('--verify-tag')
+    parser.add_argument('--source', type=Path)
     args = parser.parse_args()
     api = GitHub(os.environ['GH_TOKEN'])
     if args.verify_tag:
@@ -76,8 +83,8 @@ def main():
     run = api.request(f'/actions/runs/{args.run_id}')
     jobs = api.pages(f'/actions/runs/{args.run_id}/jobs', 'jobs')
     validate_run(run, jobs)
-    root = Path(__file__).resolve().parents[1]
-    actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+    root = (args.source or Path(__file__).resolve().parents[1]).resolve()
+    actual = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
     require(actual == run['head_sha'], 'Checkout must match the built source SHA')
     versions = {app: version(root, app) for app in ('main', 'tv')}
     tag = 'fork-main-%s-build%s-tv-%s-build%s' % (*versions['main'], *versions['tv'])
@@ -129,7 +136,8 @@ def main():
                 'url': f'https://github.com/{REPOSITORY}/releases/download/{tag}/{filename}'}
         if platform == 'android':
             report = subprocess.check_output([args.apksigner, 'verify', '--print-certs', str(target)], text=True)
-            verify_report(app, report)
+            baseline = root / 'tool/signing-baseline.json'
+            verify_report(app, report, baseline)
             badging = subprocess.check_output([args.aapt2, 'dump', 'badging', str(target)], text=True)
             package = 'com.xycz.simple_live' + ('_tv' if app == 'tv' else '')
             code = build + {'arm32': 1000, 'arm64': 2000, 'x64': 4000}[arch]
@@ -137,20 +145,19 @@ def main():
                     f"versionName='{name}'" in badging, 'APK identity/version mismatch')
             abi = {'arm32': 'armeabi-v7a', 'arm64': 'arm64-v8a', 'x64': 'x86_64'}[arch]
             require(f"native-code: '{abi}'" in badging, 'APK architecture mismatch')
-            sdk = re.search(r"^sdkVersion:'(\d+)'", badging, re.M)
-            require(sdk is not None, 'Missing Android minimum SDK')
-            item.update(build=code, packageId=package, certificate=expected_signer(app), minSdk=int(sdk[1]))
+            item.update(build=code, packageId=package, certificate=expected_signer(app, baseline),
+                        minSdk=minimum_sdk(badging))
         manifest[app]['packages'].append(item)
     fresh = api.request(f'/actions/runs/{args.run_id}')
     require(fresh['run_attempt'] == run['run_attempt'] and fresh['conclusion'] == 'success',
             'Source run changed during preparation')
     (output / 'update.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     shutil.copyfile(root / 'LICENSE', output / 'LICENSE.txt')
-    notice_paths = subprocess.check_output(['git', 'ls-files', '*LICENSE*', '*NOTICE*'], text=True).splitlines()
+    notice_paths = subprocess.check_output(['git', '-C', str(root), 'ls-files', '*LICENSE*', '*NOTICE*'], text=True).splitlines()
     with zipfile.ZipFile(output / 'THIRD-PARTY-NOTICES.zip', 'w', zipfile.ZIP_DEFLATED) as notices:
         for relative in notice_paths + ['docs/fork-builds.md']:
             notices.write(root / relative, relative)
-    subprocess.run(['git', 'archive', '--format=tar.gz', f'--output={output / "source.tar.gz"}', actual], check=True)
+    subprocess.run(['git', '-C', str(root), 'archive', '--format=tar.gz', f'--output={output / "source.tar.gz"}', actual], check=True)
     (output / 'SHA256SUMS.txt').write_text(''.join(
         f'{sha(path)}  {path.name}\n' for path in sorted(output.iterdir()) if path.is_file()), encoding='utf-8')
     notes = ('非官方免费 fork，由 Forlooong 独立维护，原作者及直播平台未为本版本背书。\n\n'
