@@ -1,5 +1,8 @@
 name: Prepare or publish update
 on:
+  push:
+    branches: [master]
+    paths: [.github/workflows/update-release.yml]
   workflow_dispatch:
     inputs:
       run_id:
@@ -18,6 +21,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   release:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -77,7 +81,27 @@ jobs:
             exit 1
           fi
           gh release create "$TAG" --target "$SOURCE_SHA" --draft \
-            --title "Simple Live fork $TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
+            --title "${{ steps.prepare.outputs.title }}" --notes-file "$RUNNER_TEMP/release-notes.md"
           gh release upload "$TAG" "$RUNNER_TEMP/update-release/"*
           python -B tool/prepare_update_release.py --verify-tag "$TAG" --output "$RUNNER_TEMP/update-release"
           gh release edit "$TAG" --draft=false --latest
+  edit-release-notes:
+    if: >-
+      github.repository == 'Forlooong/dart_simple_live' && github.event_name == 'push' && github.event.head_commit.message == 'docs: simplify published release notes'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Update release title and description
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: Forlooong/dart_simple_live
+          RELEASE_BODY: |
+            - 支持应用内检查更新、自动选择安装包、下载并打开安装器。
+            - Android / TV 可使用相同签名的新版覆盖安装；桌面端下载对应安装包更新。
+            - iOS IPA 需自行签名安装。
+
+            基于 [Simple Live](https://github.com/xiaoyaocz/dart_simple_live)，由 Forlooong 维护。源码、GPLv3 许可证及第三方声明见附件。
+        run: |
+          gh release edit fork-main-1.12.23-build11124-tv-1.7.14-build10619 \
+            --title 'Simple Live 1.12.23 / TV 1.7.14' --notes "$RELEASE_BODY"

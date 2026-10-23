@@ -160,15 +160,15 @@ def main():
     subprocess.run(['git', '-C', str(root), 'archive', '--format=tar.gz', f'--output={output / "source.tar.gz"}', actual], check=True)
     (output / 'SHA256SUMS.txt').write_text(''.join(
         f'{sha(path)}  {path.name}\n' for path in sorted(output.iterdir()) if path.is_file()), encoding='utf-8')
-    notes = ('非官方免费 fork，由 Forlooong 独立维护，原作者及直播平台未为本版本背书。\n\n'
-        f'上游：https://github.com/xiaoyaocz/dart_simple_live\n源码提交：{actual}\n'
-        '许可：GPLv3；第三方组件保留各自授权。源码和许可证随附件提供。\n'
-        'Android/TV 使用固定签名；不保证覆盖不同证书的历史安装。\n'
-        'Windows 未签名；macOS 未签名、未公证；iOS IPA 未签名，须使用适当签名渠道安装。\n'
-        '构建校验不等于真机跨版本升级验证；问题请提交到本 fork 的 Issues。\n')
+    title = f'Simple Live {versions["main"][0]} / TV {versions["tv"][0]}'
+    notes = ('- 支持应用内检查更新、自动选择安装包、下载并打开安装器。\n'
+        '- Android / TV 可使用相同签名的新版覆盖安装；桌面端下载对应安装包更新。\n'
+        '- iOS IPA 需自行签名安装。\n\n'
+        '基于 [Simple Live](https://github.com/xiaoyaocz/dart_simple_live)，'
+        '由 Forlooong 维护。源码、GPLv3 许可证及第三方声明见附件。\n')
     (output.parent / 'release-notes.md').write_text(notes, encoding='utf-8')
     with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as destination:
-        destination.write(f'tag={tag}\nsha={actual}\n')
+        destination.write(f'tag={tag}\nsha={actual}\ntitle={title}\n')
 
 
 if __name__ == '__main__':
