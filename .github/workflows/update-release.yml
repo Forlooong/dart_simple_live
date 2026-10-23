@@ -3,11 +3,7 @@ on:
   push:
     branches: [master]
     paths: [.github/workflows/update-release.yml]
-  # One explicitly authorized publication; later versions remain manual.
-  workflow_run:
-    workflows: [Build installers, Prepare or publish update]
-    types: [completed]
-    branches: [master]
+  # This exact commit message authorizes only build 39887888106; later releases are manual.
   workflow_dispatch:
     inputs:
       run_id:
