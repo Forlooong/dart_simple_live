@@ -16,6 +16,12 @@ after reviewing the packages, licenses and source. Publication creates a draft,
 uploads all files, and then makes it the latest release. An existing release/tag
 is never overwritten; failed uploads leave a draft for investigation.
 
+If master has advanced beyond the built commit, keep a branch pointing directly
+to that exact source SHA before publishing (for example, `codex/release-<version>`).
+GitHub can otherwise reject release creation for historical commits that modify
+workflows. Use the verified source SHA, not the current publisher commit; no
+additional token permissions are needed.
+
 Published files include `update.json`, installers, the GPL text, a corresponding
 source archive, third-party notices and checksums. The source archive is tied to
 the built commit. It does not by itself establish complete third-party license

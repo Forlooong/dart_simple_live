@@ -1,9 +1,5 @@
 name: Prepare or publish update
 on:
-  push:
-    branches: [master]
-    paths: [.github/workflows/update-release.yml]
-  # This exact commit message authorizes only build 39887888106; later releases are manual.
   workflow_dispatch:
     inputs:
       run_id:
@@ -22,8 +18,6 @@ concurrency:
   cancel-in-progress: false
 jobs:
   release:
-    if: >-
-      github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.event.head_commit.message == 'ci: publish verified build 39887888106')
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -46,7 +40,7 @@ jobs:
       - name: Select immutable build source
         env:
           GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ inputs.run_id || '39887888106' }}
+          RUN_ID: ${{ inputs.run_id }}
         run: |
           [[ "$RUN_ID" =~ ^[0-9]+$ ]]
           sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq .head_sha)
@@ -56,7 +50,7 @@ jobs:
         id: prepare
         env:
           GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ inputs.run_id || '39887888106' }}
+          RUN_ID: ${{ inputs.run_id }}
         run: |
           apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)
           python -B tool/prepare_update_release.py "$RUN_ID" --output "$RUNNER_TEMP/update-release" \
@@ -71,7 +65,7 @@ jobs:
             ${{ runner.temp }}/release-notes.md
           retention-days: 14
       - name: Publish complete release
-        if: inputs.publish || github.event_name == 'push'
+        if: inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.prepare.outputs.tag }}
