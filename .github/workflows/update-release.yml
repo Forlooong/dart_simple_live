@@ -1,5 +1,10 @@
 name: Prepare or publish update
 on:
+  # One explicitly authorized publication; later versions remain manual.
+  workflow_run:
+    workflows: [Build installers]
+    types: [completed]
+    branches: [master]
   workflow_dispatch:
     inputs:
       run_id:
@@ -18,6 +23,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   release:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.id == 39887888106 && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -37,7 +43,7 @@ jobs:
       - name: Select immutable build source
         env:
           GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ inputs.run_id }}
+          RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
         run: |
           [[ "$RUN_ID" =~ ^[0-9]+$ ]]
           sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq .head_sha)
@@ -47,7 +53,7 @@ jobs:
         id: prepare
         env:
           GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ inputs.run_id }}
+          RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
         run: |
           apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)
           python -B tool/prepare_update_release.py "$RUN_ID" --output "$RUNNER_TEMP/update-release" \
@@ -61,7 +67,7 @@ jobs:
             ${{ runner.temp }}/release-notes.md
           retention-days: 14
       - name: Publish complete release
-        if: inputs.publish
+        if: inputs.publish || github.event_name == 'workflow_run'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.prepare.outputs.tag }}
