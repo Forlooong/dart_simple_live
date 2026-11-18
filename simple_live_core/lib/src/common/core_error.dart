@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:dio/dio.dart';
 
 enum CoreErrorKind {
@@ -21,6 +23,7 @@ class CoreError extends Error {
   final CoreErrorKind kind;
   final String? site;
   final List<CoreError> failures;
+  final Duration? retryAfter;
 
   bool get retriable =>
       kind == CoreErrorKind.timeout ||
@@ -35,6 +38,7 @@ class CoreError extends Error {
     this.kind = CoreErrorKind.unknown,
     this.site,
     this.failures = const [],
+    this.retryAfter,
   });
 
   factory CoreError.fromDio(DioException error, {String? site}) {
@@ -66,8 +70,26 @@ class CoreError extends Error {
       statusCode: status,
       kind: kind,
       site: site,
+      retryAfter: kind == CoreErrorKind.rateLimited
+          ? parseRetryAfter(error.response?.headers.value('retry-after'))
+          : null,
     );
   }
+
+  static Duration? parseRetryAfter(String? value) {
+    if (value == null) return null;
+    final seconds = int.tryParse(value.trim());
+    if (seconds != null) return seconds > 0 ? Duration(seconds: seconds) : null;
+    try {
+      final wait = HttpDate.parse(value).difference(DateTime.now());
+      return wait > Duration.zero ? wait : null;
+    } on FormatException {
+      return null;
+    } on HttpException {
+      return null;
+    }
+  }
+
   @override
   String toString() {
     if (statusCode != 0) {

@@ -56,7 +56,7 @@ class SignalRService {
       _stateStreamController.add(state);
     });
     hubConnection!.onreconnected(({String? connectionId}) {
-      Log.d("reconnected: $connectionId");
+      Log.d("远程同步已重新连接");
       state = SignalRConnectionState.connected;
       _stateStreamController.add(state);
     });

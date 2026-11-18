@@ -170,7 +170,7 @@ void main() {
         }
       }
       CoreLog.error(const FormatException('PRIVATE_CANARY'));
-    expect(logs, isNotEmpty);
+      expect(logs, isNotEmpty);
       expect(logs.join('\n'), isNot(contains('PRIVATE_CANARY')));
       final previous = logs.length;
       CoreLog.requestLogType = RequestLogType.none;
@@ -241,6 +241,38 @@ void main() {
       release.complete(response({'ok': true}));
       await assertion;
       expect(context.isCancelled, isTrue);
+    },
+  );
+
+  test(
+    'room polling cancels the Bilibili fingerprint request at its own deadline',
+    () async {
+      final started = Completer<RequestOptions>();
+      final release = Completer<ResponseBody>();
+      client.dio.httpClientAdapter = _Adapter((options) {
+        started.complete(options);
+        return release.future;
+      });
+      final context = RequestContext(
+        timeout: const Duration(milliseconds: 200),
+      );
+      final polling = context.run(
+        () => BiliBiliSite().getLiveStatus(roomId: '1'),
+      );
+      final assertion = expectLater(
+        polling,
+        throwsA(failure(CoreErrorKind.timeout)),
+      );
+      final request = await started.future;
+      expect(request.uri.path, '/x/frontend/finger/spi');
+      expect(request.cancelToken, same(context.cancelToken));
+      await assertion;
+      expect(request.cancelToken!.isCancelled, isTrue);
+      release.complete(
+        response({
+          'data': {'b_3': 'synthetic'},
+        }),
+      );
     },
   );
 
@@ -334,8 +366,8 @@ void main() {
           ...hosts.where((h) => Uri.parse(h).host.contains('mcdn')),
         ];
         final quality = (await site.getPlayQualites(detail: room())).single;
-      expect(quality.data, 10000);
-      expect(quality.id, '10000');
+        expect(quality.data, 10000);
+        expect(quality.id, '10000');
         expect(
           (await site.getPlayUrls(
             detail: room(),

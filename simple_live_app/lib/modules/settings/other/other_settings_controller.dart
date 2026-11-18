@@ -135,21 +135,34 @@ class OtherSettingsController extends BaseController {
     loadLogFiles();
   }
 
-  void shareLogFile(LogFileModel item) {
-    SharePlus.instance.share(ShareParams(files: [XFile(item.path)]));
+  Future<String> _diagnosticSummary(LogFileModel item) async =>
+      Log.diagnosticSummary(
+        await File(item.path).readAsLines(),
+        version: Utils.packageInfo.version,
+        platform: Platform.operatingSystem,
+      );
+
+  Future<void> shareLogFile(LogFileModel item) async {
+    try {
+      final summary = await _diagnosticSummary(item);
+      await SharePlus.instance.share(ShareParams(text: summary));
+    } catch (_) {
+      SmartDialog.showToast('无法生成诊断摘要');
+    }
   }
 
   void saveLogFile(LogFileModel item) async {
-    var filePath = await FilePicker.platform.saveFile(
-      allowedExtensions: ['log'],
-      type: FileType.custom,
-      fileName: item.name,
-      bytes: Uint8List(0),
-    );
-    if (filePath != null) {
-      var file = File(item.path);
-      await file.copy(filePath);
-      SmartDialog.showToast("保存成功");
+    try {
+      final summary = await _diagnosticSummary(item);
+      final filePath = await FilePicker.platform.saveFile(
+        allowedExtensions: ['log'],
+        type: FileType.custom,
+        fileName: 'SimpleLive-diagnostics.log',
+        bytes: Uint8List.fromList(utf8.encode(summary)),
+      );
+      if (filePath != null) SmartDialog.showToast("已保存诊断摘要");
+    } catch (_) {
+      SmartDialog.showToast('无法保存诊断摘要');
     }
   }
 

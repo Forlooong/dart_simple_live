@@ -12,12 +12,16 @@ class LiveAnchorItem {
 
   /// 直播中
   final bool liveStatus;
+  final bool statusKnown;
+  final String? roomTitle;
 
   LiveAnchorItem({
     required this.roomId,
     required this.avatar,
     required this.userName,
     required this.liveStatus,
+    this.statusKnown = true,
+    this.roomTitle,
   });
 
   @override

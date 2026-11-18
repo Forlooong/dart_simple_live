@@ -60,9 +60,19 @@ class BiliBiliSite extends LiveSite {
     }
   }
 
-  Future<Map<String, String>> getHeader() async {
+  Future<Map<String, String>> getHeader() => _getHeader();
+
+  Future<Map<String, String>> _getHeader({
+    bool useRequestDeadline = false,
+  }) async {
     if (buvid3.isEmpty && !cookie.contains('buvid3=')) {
-      await (_buvidLoading ??= _loadBuvid());
+      if (useRequestDeadline) {
+        final info = await getBuvid(reportBlockingError: true);
+        buvid3 = info['b_3'] ?? '';
+        buvid4 = info['b_4'] ?? '';
+      } else {
+        await (_buvidLoading ??= _loadBuvid());
+      }
       RequestContext.current?.check();
     }
     return cookie.isEmpty
@@ -360,8 +370,10 @@ class BiliBiliSite extends LiveSite {
   }
 
   @override
-  Future<LiveSearchRoomResult> searchRooms(String keyword,
-      {int page = 1}) async {
+  Future<LiveSearchRoomResult> searchRooms(
+    String keyword, {
+    int page = 1,
+  }) async {
     var result = await HttpClient.instance.getJson(
       "https://api.bilibili.com/x/web-interface/search/type?context=&search_type=live&cover_type=user_cover",
       queryParameters: {
@@ -372,9 +384,9 @@ class BiliBiliSite extends LiveSite {
         "_extra": "",
         "highlight": 0,
         "single_column": 0,
-        "page": page
+        "page": page,
       },
-      header: await getHeader(),
+      header: await _statusHeader(),
     );
 
     var items = <LiveRoomItem>[];
@@ -388,6 +400,9 @@ class BiliBiliSite extends LiveSite {
         cover: "https:${item["cover"]}@400w.jpg",
         userName: item["uname"].toString(),
         online: int.tryParse(item["online"].toString()) ?? 0,
+        liveStatus: item['live_status'] is int
+            ? item['live_status'] == 1
+            : null,
       );
       items.add(roomItem);
     }
@@ -395,8 +410,10 @@ class BiliBiliSite extends LiveSite {
   }
 
   @override
-  Future<LiveSearchAnchorResult> searchAnchors(String keyword,
-      {int page = 1}) async {
+  Future<LiveSearchAnchorResult> searchAnchors(
+    String keyword, {
+    int page = 1,
+  }) async {
     var result = await HttpClient.instance.getJson(
       "https://api.bilibili.com/x/web-interface/search/type?context=&search_type=live_user&cover_type=user_cover",
       queryParameters: {
@@ -407,9 +424,9 @@ class BiliBiliSite extends LiveSite {
         "_extra": "",
         "highlight": 0,
         "single_column": 0,
-        "page": page
+        "page": page,
       },
-      header: await getHeader(),
+      header: await _statusHeader(),
     );
 
     var items = <LiveAnchorItem>[];
@@ -421,7 +438,8 @@ class BiliBiliSite extends LiveSite {
         roomId: item["roomid"].toString(),
         avatar: "https:${item["uface"]}@400w.jpg",
         userName: uname,
-        liveStatus: item["is_live"],
+        liveStatus: item['is_live'] == true || item['is_live'] == 1,
+        statusKnown: const {true, false, 0, 1}.contains(item['is_live']),
       );
       items.add(anchorItem);
     }
@@ -432,13 +450,15 @@ class BiliBiliSite extends LiveSite {
   Future<bool> getLiveStatus({required String roomId}) async {
     var result = await HttpClient.instance.getJson(
       "https://api.live.bilibili.com/room/v1/Room/get_info",
-      queryParameters: {
-        "room_id": roomId,
-      },
-      header: await getHeader(),
+      queryParameters: {"room_id": roomId},
+      header: await _statusHeader(),
     );
     return LiveStatusParser.bilibili(result);
   }
+
+  Future<Map<String, String>> _statusHeader() => RequestContext.current == null
+      ? getHeader()
+      : _getHeader(useRequestDeadline: true);
 
   @override
   Future<LiveRoomStatus> getRoomStatusSnapshot({required String roomId}) async {
@@ -490,7 +510,7 @@ class BiliBiliSite extends LiveSite {
   ///   "b_4": "buvid4",
   /// }
   /// ```
-  Future<Map> getBuvid() async {
+  Future<Map> getBuvid({bool reportBlockingError = false}) async {
     try {
       if (cookie.contains("buvid3")) {
         return {
@@ -510,10 +530,14 @@ class BiliBiliSite extends LiveSite {
       );
       return result["data"];
     } catch (e) {
-      return {
-        "b_3": "",
-        "b_4": "",
-      };
+      if (reportBlockingError) {
+        RequestContext.current?.check();
+        if (e is CoreError &&
+            (e.kind == CoreErrorKind.rateLimited ||
+                e.kind == CoreErrorKind.authRequired))
+          rethrow;
+      }
+      return {"b_3": "", "b_4": ""};
     }
   }
 

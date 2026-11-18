@@ -179,7 +179,7 @@ class SyncService extends GetxService {
       json.encode(data).codeUnits,
       Endpoint.broadcast(port: const Port(udpPort)),
     );
-    Log.i("send udp info: $data");
+    Log.i("局域网同步广播已发送");
   }
 
   /// 读取本地IP
@@ -340,6 +340,13 @@ class SyncService extends GetxService {
       final cookie = jsonBody['cookie'];
       if (cookie is! String || cookie.length > 65536) {
         throw const FormatException('账号格式无效');
+      }
+      if (cookie.isEmpty ||
+          !await Utils.showAlertDialog(
+            '配对设备请求将哔哩哔哩会话保存到本机。继续会替换当前账号。',
+            title: '接收哔哩哔哩账号',
+          )) {
+        return toJsonResponse({'status': false, 'message': 'account declined'});
       }
       await BiliBiliAccountService.instance.setCookie(cookie);
       BiliBiliAccountService.instance.loadUserInfo();

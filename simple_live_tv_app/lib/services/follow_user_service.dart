@@ -7,7 +7,6 @@ import 'package:simple_live_tv_app/app/constant.dart';
 import 'package:simple_live_tv_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_tv_app/app/controller/base_controller.dart';
 import 'package:simple_live_tv_app/app/event_bus.dart';
-import 'package:simple_live_tv_app/app/log.dart';
 import 'package:simple_live_tv_app/app/sites.dart';
 import 'package:simple_live_tv_app/app/utils.dart';
 import 'package:simple_live_tv_app/models/db/follow_user.dart';
@@ -26,6 +25,7 @@ class FollowUserService extends BasePageController<FollowUser>
   var updatedCount = 0;
   var updating = false.obs;
   final _refreshQueue = StatusRefreshQueue();
+  late final _recovery = PlatformRecovery(now: _now);
   Future<void>? _refreshFuture;
   final _refreshSeen = HashSet<FollowUser>.identity();
   bool _refreshAutomatic = false;
@@ -53,14 +53,15 @@ class FollowUserService extends BasePageController<FollowUser>
   }
 
   Duration get _refreshInterval => Duration(
-        minutes: AppSettingsController.instance.autoUpdateFollowDuration.value
-            .clamp(1, 1440),
-      );
+    minutes: AppSettingsController.instance.autoUpdateFollowDuration.value
+        .clamp(1, 1440),
+  );
 
   @override
   void onInit() {
     WidgetsBinding.instance.addObserver(this);
-    _foreground = WidgetsBinding.instance.lifecycleState == null ||
+    _foreground =
+        WidgetsBinding.instance.lifecycleState == null ||
         WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
     subscription = EventBus.instance.listen(Constant.kUpdateFollow, (_) {
       list.assignAll(DBService.instance.getFollowList());
@@ -199,14 +200,23 @@ class FollowUserService extends BasePageController<FollowUser>
         identical(DBService.instance.followBox.get(item.id), item);
     if (!current()) return;
     try {
-      final status = await site.getRoomStatusCached(
-        roomId: item.roomId,
-        automatic: automatic,
-      );
-      if (current()) item.liveStatus.value = status.live ? 2 : 1;
+      final cached = automatic ? site.peekRoomStatus(item.roomId) : null;
+      final status =
+          cached ??
+          await _recovery.run<LiveRoomStatus>(
+            item.siteId,
+            version,
+            () =>
+                site.getRoomStatusCached(roomId: item.roomId, automatic: false),
+          );
+      if (!current()) return;
+      item.liveStatus.value = status.live ? 2 : 1;
+      if (cached == null || item.lastStatusCheck == null)
+        item.lastStatusCheck = _now();
+      item.statusIssue.value = null;
     } catch (error) {
-      Log.logPrint(error);
-      if (current()) item.liveStatus.value = 0;
+      if (!current()) return;
+      item.statusIssue.value = PlatformRecovery.classify(error).name;
     }
   }
 

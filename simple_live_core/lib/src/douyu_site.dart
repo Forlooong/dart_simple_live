@@ -362,6 +362,10 @@ class DouyuSite extends LiveSite {
         avatar: item["anchorInfo"]["avatar"].toString(),
         userName: item["anchorInfo"]["nickName"].toString(),
         liveStatus: liveStatus && roomType == 0,
+        statusKnown: const {
+          '0',
+          '1',
+        }.contains(item["anchorInfo"]["isLive"].toString()),
       );
       items.add(roomItem);
     }

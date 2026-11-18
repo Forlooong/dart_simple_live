@@ -1,0 +1,47 @@
+name: Pull request checks
+
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [simple_live_core, simple_live_app, simple_live_tv_app]
+    defaults:
+      run:
+        working-directory: ${{ matrix.package }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@1a449444c387b1966244d4f8c696479add0b1
+        with:
+          flutter-version: '3.38.10'
+          channel: stable
+          cache: true
+      - uses: ./.github/actions/setup-native
+      - name: Test core contracts
+        if: matrix.package == 'simple_live_core'
+        run: |
+          dart pub get
+          dart analyze --no-fatal-warnings lib
+          dart analyze --no-fatal-warnings test
+          dart test --exclude-tags network
+      - name: Test application contracts
+        if: matrix.package != 'simple_live_core'
+        run: |
+          flutter pub get --enforce-lockfile
+          flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings
+          flutter test --no-pub

@@ -130,6 +130,7 @@ mixin PlayerStateMixin on PlayerMixin {
 
   /// 自动隐藏控制器计时器
   Timer? hideControlsTimer;
+  bool _controlsFocused = false;
 
   /// 自动隐藏提示计时器
   Timer? hideSeekTipTimer;
@@ -168,8 +169,18 @@ mixin PlayerStateMixin on PlayerMixin {
   void resetHideControlsTimer() {
     if (playerClosing) return;
     hideControlsTimer?.cancel();
+    if (!_controlsFocused) {
+      hideControlsTimer = Timer(const Duration(seconds: 5), hideControls);
+    }
+  }
 
-    hideControlsTimer = Timer(const Duration(seconds: 5), hideControls);
+  void setControlsFocused(bool focused) {
+    _controlsFocused = focused;
+    if (focused && !lockControlsState.value) {
+      showControls();
+    } else {
+      resetHideControlsTimer();
+    }
   }
 
   void updateScaleMode() {

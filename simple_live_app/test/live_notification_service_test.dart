@@ -256,7 +256,8 @@ void main() {
       await synchronized.timeout(const Duration(seconds: 2));
       final updated = await snapshots.readConfig();
       expect(updated.rooms.single.generation, generation);
-      expect(updated.bilibiliCookie, 'updated cookie');
+      expect(updated.credentialRevision('bilibili'), config.credentialRevision('bilibili') + 1);
+      expect(await snapshots.readPlatformCookie('bilibili'), 'updated cookie');
     });
 
     test('turning off the last selection cancels its alert and periodic task',

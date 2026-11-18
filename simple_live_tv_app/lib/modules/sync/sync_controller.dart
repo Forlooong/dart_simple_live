@@ -9,6 +9,7 @@ import 'package:simple_live_tv_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_tv_app/app/controller/base_controller.dart';
 import 'package:simple_live_tv_app/app/event_bus.dart';
 import 'package:simple_live_tv_app/app/log.dart';
+import 'package:simple_live_tv_app/app/utils.dart';
 import 'package:simple_live_tv_app/services/bilibili_account_service.dart';
 import 'package:simple_live_tv_app/services/db_service.dart';
 import 'package:simple_live_tv_app/services/signalr_service.dart';
@@ -109,8 +110,8 @@ class SyncController extends BaseController {
       EventBus.instance.emit(Constant.kUpdateFollow, 0);
       SmartDialog.showToast("已同步关注列表");
     } catch (e) {
-      SmartDialog.showToast("同步失败:$e");
-      Log.logPrint(e);
+      SmartDialog.showToast("同步失败，请重试");
+      Log.w("远程房间同步失败");
     }
   }
 
@@ -121,8 +122,8 @@ class SyncController extends BaseController {
       SmartDialog.showToast('已同步历史记录');
       EventBus.instance.emit(Constant.kUpdateHistory, 0);
     } catch (e) {
-      SmartDialog.showToast("同步失败:$e");
-      Log.logPrint(e);
+      SmartDialog.showToast("同步失败，请重试");
+      Log.w("远程房间同步失败");
     }
   }
 
@@ -130,11 +131,13 @@ class SyncController extends BaseController {
     try {
       final jsonBody = json.decode(data) as List;
       await AppSettingsController.instance.importShieldRules(
-          jsonBody, replace: overlay);
+        jsonBody,
+        replace: overlay,
+      );
       SmartDialog.showToast('已同步屏蔽词');
     } catch (e) {
-      SmartDialog.showToast("同步失败:$e");
-      Log.logPrint(e);
+      SmartDialog.showToast("同步失败，请重试");
+      Log.w("远程房间同步失败");
     }
   }
 
@@ -142,12 +145,20 @@ class SyncController extends BaseController {
     try {
       var jsonBody = json.decode(data);
       var cookie = jsonBody['cookie'];
+      if (cookie is! String ||
+          cookie.isEmpty ||
+          cookie.length > 65536 ||
+          !await Utils.showAlertDialog(
+            '同步房间送来了哔哩哔哩会话。继续会替换当前账号。',
+            title: '接收哔哩哔哩账号',
+          ))
+        return;
       await BiliBiliAccountService.instance.setCookie(cookie);
       await BiliBiliAccountService.instance.loadUserInfo();
       SmartDialog.showToast('已同步哔哩哔哩账号');
     } catch (e) {
-      SmartDialog.showToast("同步失败:$e");
-      Log.logPrint(e);
+      SmartDialog.showToast("同步失败，请重试");
+      Log.w("远程房间同步失败");
     }
   }
 

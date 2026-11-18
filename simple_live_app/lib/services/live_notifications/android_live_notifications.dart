@@ -13,6 +13,7 @@ import 'notification_subscription.dart';
 
 const liveCheckTask = 'simple_live.selected_rooms.check.v1';
 const liveCheckUniqueName = 'simple_live.selected_rooms.periodic.v1';
+const liveReminderSummaryPayload = 'simple_live.reminder_center.v1';
 const liveNotificationChannel = AndroidNotificationChannel(
   'selected_room_live_v1',
   '关注直播间开播',
@@ -45,25 +46,32 @@ void liveNotificationCallbackDispatcher() {
       // No foreground services, player initialization or Hive access here.
       CoreLog.enableLog = false;
       final store = await openNotificationStore();
-      final config = await store.readConfig();
-      if (config.rooms.isEmpty) return true;
       final notifications = FlutterLocalNotificationsPlugin();
       await notifications.initialize(liveNotificationInitialization);
-      final android = notifications.resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin>();
+      final android = notifications
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >();
       if (await android?.areNotificationsEnabled() != true) return true;
       await android?.createNotificationChannel(liveNotificationChannel);
-      final sites = <String, LiveSite>{
-        'bilibili': BiliBiliSite()..cookie = config.bilibiliCookie,
-        'douyu': DouyuSite(),
-        'huya': HuyaSite(),
-        'douyin': DouyinSite()..cookie = config.douyinCookie,
-      };
+      final sites = <String, Future<LiveSite>>{};
       await LiveCheckRunner(
         store: store,
-        check: (room) {
-          final site = sites[room.siteId];
-          if (site == null) throw const FormatException('Unsupported site');
+        check: (room) async {
+          final site = await sites.putIfAbsent(
+            room.siteId,
+            () async => switch (room.siteId) {
+              'bilibili' =>
+                BiliBiliSite()
+                  ..cookie = await store.readPlatformCookie(room.siteId),
+              'douyu' => DouyuSite(),
+              'huya' => HuyaSite(),
+              'douyin' =>
+                DouyinSite()
+                  ..cookie = await store.readPlatformCookie(room.siteId),
+              _ => throw const FormatException('Unsupported site'),
+            },
+          );
           return site.getLiveStatus(roomId: room.roomId);
         },
         show: (room) => notifications.show(
@@ -86,6 +94,20 @@ void liveNotificationCallbackDispatcher() {
           payload: jsonEncode(room.toJson()),
         ),
         cancel: (room) => notifications.cancel(liveNotificationId(room.id)),
+        showSummary: (count) => notifications.show(
+          liveNotificationId(liveReminderSummaryPayload),
+          '免打扰期间的开播提醒',
+          '$count 个关注房间仍在直播',
+          const NotificationDetails(
+            android: AndroidNotificationDetails(
+              'selected_room_live_v1',
+              '关注直播间开播',
+              icon: 'ic_live_notification',
+              autoCancel: true,
+            ),
+          ),
+          payload: liveReminderSummaryPayload,
+        ),
       ).run();
       return true;
     } catch (_) {
@@ -100,7 +122,8 @@ NotificationSubscription? notificationRoomFromPayload(String? payload) {
   if (payload == null) return null;
   try {
     final room = NotificationSubscription.fromJson(
-        Map<String, dynamic>.from(jsonDecode(payload)));
+      Map<String, dynamic>.from(jsonDecode(payload)),
+    );
     if (!const {'bilibili', 'douyu', 'huya', 'douyin'}.contains(room.siteId) ||
         room.roomId.isEmpty ||
         room.id != '${room.siteId}_${room.roomId}') {

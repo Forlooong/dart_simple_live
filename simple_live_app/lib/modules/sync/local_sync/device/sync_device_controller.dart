@@ -35,8 +35,8 @@ class SyncDeviceController extends BaseController {
       await request.syncFollow(client, snapshot, overlay: overlay);
       SmartDialog.showToast("已同步关注列表和标签");
     } catch (e) {
-      SmartDialog.showToast("同步失败:$e");
-      Log.logPrint(e);
+      SmartDialog.showToast("同步失败，请检查配对后重试");
+      Log.w("配对同步失败");
     } finally {
       SmartDialog.dismiss();
     }
@@ -51,8 +51,8 @@ class SyncDeviceController extends BaseController {
       await request.syncHistory(client, data, overlay: overlay);
       SmartDialog.showToast("已同步历史记录");
     } catch (e) {
-      SmartDialog.showToast("同步失败:$e");
-      Log.logPrint(e);
+      SmartDialog.showToast("同步失败，请检查配对后重试");
+      Log.w("配对同步失败");
     } finally {
       SmartDialog.dismiss();
     }
@@ -67,8 +67,8 @@ class SyncDeviceController extends BaseController {
       await request.syncBlockedWord(client, data, overlay: overlay);
       SmartDialog.showToast("已同步屏蔽词");
     } catch (e) {
-      SmartDialog.showToast("同步失败:$e");
-      Log.logPrint(e);
+      SmartDialog.showToast("同步失败，请检查配对后重试");
+      Log.w("配对同步失败");
     } finally {
       SmartDialog.dismiss();
     }
@@ -80,14 +80,21 @@ class SyncDeviceController extends BaseController {
         SmartDialog.showToast("未登录哔哩哔哩");
         return;
       }
+      if (!await Utils.showAlertDialog(
+        '通过已配对的加密局域网连接，将哔哩哔哩会话发送给 ${client.name}（${client.address}）。',
+        title: '发送哔哩哔哩账号',
+      ))
+        return;
       SmartDialog.showLoading(msg: "同步中...");
 
       await request.syncBiliAccount(
-          client, BiliBiliAccountService.instance.cookie);
+        client,
+        BiliBiliAccountService.instance.cookie,
+      );
       SmartDialog.showToast("已同步哔哩哔哩账号");
     } catch (e) {
-      SmartDialog.showToast("同步失败:$e");
-      Log.logPrint(e);
+      SmartDialog.showToast("同步失败，请检查配对后重试");
+      Log.w("配对同步失败");
     } finally {
       SmartDialog.dismiss();
     }

@@ -72,3 +72,16 @@ Its existing build-number representation is preserved, not remapped to a lower
 value. Windows CI checks repeated installation, previous-directory reuse and a
 data sentinel; that is a packaging regression check, not an old-version/user-data
 migration certification. Missing gates remain visible as blockers.
+
+## Follow, restore and search regression matrix
+
+| Target | Release candidate exercise |
+| --- | --- |
+| Android phone | Start, aggregate search, play, follow, preview WebDAV changes, apply and roll back offline. Check notification permission, background polling, a quiet-hours summary, its tap target and a subscription cancelled during a check. Repeat the main flow with TalkBack and enlarged text. |
+| Android TV | Start, search, open playback, adjust quality and return to follows using the remote. Verify focus after a list refresh and after closing a player panel. Check that paired account transfer asks for permission on the receiving device. |
+| Windows, macOS and Linux | Start, perform an aggregate search with one unavailable platform, adjust playback with the keyboard and return to follows. Verify the WebDAV preview and rollback dialogs with the keyboard. |
+| Signed iOS | Verify startup, search, playback, follows, WebDAV restore and rollback with VoiceOver and enlarged text. |
+
+The PR workflow runs deterministic regression suites for core, the main app and
+TV using the release Flutter version. Record the results and each manual matrix
+entry against the same commit used to build the candidate.

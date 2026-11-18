@@ -3,10 +3,13 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/sites.dart';
+import 'package:simple_live_app/modules/sync/remote_sync/room/remote_sync_room_controller.dart';
+import 'package:simple_live_app/modules/sync/remote_sync/webdav/remote_sync_webdav_controller.dart';
 import 'package:simple_live_app/requests/http_client.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
@@ -87,6 +90,56 @@ void main() {
     }
     expect(adapter.responses, hasLength(1));
   }
+
+  test(
+    'a rejected legacy session leaves the current account in the vault',
+    () async {
+      await account.setCookie('existing');
+      final imported = account.importVerifiedCookie('legacy');
+      await requested();
+      adapter.complete(0, valid: false);
+      expect(await imported, isFalse);
+      expect(account.cookie, 'existing');
+      expect(storage.saved, 'existing');
+    },
+  );
+
+  testWidgets('rejecting an incoming room account leaves the vault untouched', (
+    tester,
+  ) async {
+    Get.put(account);
+    await account.setCookie('existing');
+    await tester.pumpWidget(const GetMaterialApp(home: Scaffold()));
+    final controller = RemoteSyncRoomController('test-room');
+    controller.onReceiveBiliAccount(true, '{"cookie":"incoming"}');
+    await tester.pumpAndSettle();
+    expect(find.text('接收哔哩哔哩账号'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(storage.saved, 'existing');
+    expect(adapter.responses, isEmpty);
+    controller.signalR.dispose();
+  });
+
+  testWidgets('cancelling a new HTTP WebDAV destination creates no client', (
+    tester,
+  ) async {
+    await tester.pumpWidget(const GetMaterialApp(home: Scaffold()));
+    final controller = RemoteSyncWebDAVController();
+    final login = controller.doWebDAVLogin(
+      'http://example.invalid/dav',
+      'test',
+      'canary',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('确认 WebDAV 服务'), findsOneWidget);
+    expect(find.textContaining('http://example.invalid'), findsOneWidget);
+    expect(find.textContaining('canary'), findsNothing);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    await login;
+    expect(() => controller.davClient, throwsA(anything));
+  });
 
   test(
     'late account A success cannot attach its user ID to cookie B',

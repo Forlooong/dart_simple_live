@@ -1,9 +1,9 @@
 name: Build installers
-run-name: "Build all platforms · Main 1.12.23+11124 · TV 1.7.14+10619 · #${{ github.run_number }}"
+run-name: "Build all platforms · Main 1.12.24+11125 · TV 1.7.15+10620 · #${{ github.run_number }}"
 
 on:
   push:
-    branches: [master]
+    branches: [master, codex/release-acceptance]
     paths-ignore:
       - .github/workflows/update-release.yml
       - tool/prepare_update_release.py

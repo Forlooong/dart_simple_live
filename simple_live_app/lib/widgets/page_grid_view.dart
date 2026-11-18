@@ -19,6 +19,7 @@ class PageGridView extends StatelessWidget {
   final double crossAxisSpacing, mainAxisSpacing;
   final int crossAxisCount;
   final bool showPCRefreshButton;
+  final ChildIndexGetter? findChildIndexCallback;
   const PageGridView({
     required this.itemBuilder,
     required this.pageController,
@@ -29,6 +30,7 @@ class PageGridView extends StatelessWidget {
     this.crossAxisSpacing = 0.0,
     this.mainAxisSpacing = 0.0,
     this.showPCRefreshButton = true,
+    this.findChildIndexCallback,
     required this.crossAxisCount,
     Key? key,
   }) : super(key: key);
@@ -50,11 +52,16 @@ class PageGridView extends StatelessWidget {
             firstRefresh: firstRefresh,
             onLoad: pageController.loadData,
             onRefresh: pageController.refreshData,
-            child: MasonryGridView.count(
+            child: MasonryGridView.custom(
               padding: padding,
-              itemCount: pageController.list.length,
-              itemBuilder: itemBuilder,
-              crossAxisCount: crossAxisCount,
+              childrenDelegate: SliverChildBuilderDelegate(
+                itemBuilder,
+                childCount: pageController.list.length,
+                findChildIndexCallback: findChildIndexCallback,
+              ),
+              gridDelegate: SliverSimpleGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: crossAxisCount,
+              ),
               crossAxisSpacing: crossAxisSpacing,
               mainAxisSpacing: mainAxisSpacing,
             ),
@@ -64,8 +71,9 @@ class PageGridView extends StatelessWidget {
             left: 0,
             right: 0,
             child: // 加载更多按钮
-                Visibility(
-              visible: (Platform.isWindows ||
+            Visibility(
+              visible:
+                  (Platform.isWindows ||
                       Platform.isLinux ||
                       Platform.isMacOS) &&
                   pageController.canLoadMore.value &&
@@ -83,8 +91,9 @@ class PageGridView extends StatelessWidget {
             bottom: 12,
             right: 12,
             child: // 加载更多按钮
-                Visibility(
-              visible: (Platform.isWindows ||
+            Visibility(
+              visible:
+                  (Platform.isWindows ||
                       Platform.isLinux ||
                       Platform.isMacOS) &&
                   pageController.canLoadMore.value &&

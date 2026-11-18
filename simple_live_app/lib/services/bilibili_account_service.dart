@@ -88,6 +88,28 @@ class BiliBiliAccountService extends GetxService {
     setSite();
   }
 
+  Future<bool> importVerifiedCookie(String candidate) async {
+    final revision = _accountRevision;
+    final result = await HttpClient.instance.getJson(
+      'https://api.bilibili.com/x/member/web/account',
+      header: {'Cookie': candidate},
+    );
+    if (result is! Map ||
+        result['code'] != 0 ||
+        result['data'] is! Map ||
+        revision != _accountRevision)
+      return false;
+    final info = BiliBiliUserInfoModel.fromJson(result['data']);
+    if (info.mid == null || info.mid! <= 0) return false;
+    await setCookie(candidate);
+    if (cookie == candidate) {
+      uid = info.mid!;
+      name.value = info.uname ?? '未登录';
+      setSite();
+    }
+    return cookie == candidate;
+  }
+
   Future<void> logout() async {
     await setCookie('');
 

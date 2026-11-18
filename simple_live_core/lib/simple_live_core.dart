@@ -35,5 +35,7 @@ export 'src/common/playback_diagnostics.dart';
 export 'src/common/request_context.dart';
 
 export 'src/common/core_error.dart';
+export 'src/common/platform_recovery.dart';
+export 'src/common/diagnostic_metadata.dart';
 
 export 'src/common/shield_rules.dart';

@@ -34,12 +34,7 @@ class FollowUserItem extends StatelessWidget {
     var site = Sites.allSites[item.siteId]!;
     return ListTile(
       contentPadding: AppStyle.edgeInsetsL16.copyWith(right: 4),
-      leading: NetImage(
-        item.face,
-        width: 48,
-        height: 48,
-        borderRadius: 24,
-      ),
+      leading: NetImage(item.face, width: 48, height: 48, borderRadius: 24),
       title: Text.rich(
         TextSpan(
           text: item.userName,
@@ -48,7 +43,9 @@ class FollowUserItem extends StatelessWidget {
               alignment: ui.PlaceholderAlignment.middle,
               child: Obx(
                 () => Offstage(
-                  offstage: item.liveStatus.value == 0,
+                  offstage:
+                      item.liveStatus.value == 0 &&
+                      item.statusIssue.value == null,
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -65,12 +62,12 @@ class FollowUserItem extends StatelessWidget {
                       ),
                       AppStyle.hGap4,
                       Text(
-                        getStatus(item.liveStatus.value),
+                        statusLabel(),
+                        semanticsLabel: statusLabel(includeTime: true),
                         style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.normal,
-                          color:
-                              item.liveStatus.value == 2 ? null : Colors.grey,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
                         ),
                       ),
                     ],
@@ -84,17 +81,11 @@ class FollowUserItem extends StatelessWidget {
       subtitle: Wrap(
         runSpacing: 1.0,
         children: [
-          Image.asset(
-            site.logo,
-            width: 20,
-          ),
+          Image.asset(site.logo, width: 20),
           AppStyle.hGap4,
           Text(
             site.name,
-            style: const TextStyle(
-              fontSize: 12,
-              color: Colors.grey,
-            ),
+            style: const TextStyle(fontSize: 12, color: Colors.grey),
             overflow: TextOverflow.ellipsis,
           ),
           if (playing)
@@ -114,10 +105,7 @@ class FollowUserItem extends StatelessWidget {
               padding: AppStyle.edgeInsetsL8,
               child: Text(
                 '开播了${formatLiveDuration(item.liveStartTime)}',
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey,
-                ),
+                style: const TextStyle(fontSize: 12, color: Colors.grey),
               ),
             ),
         ],
@@ -125,63 +113,70 @@ class FollowUserItem extends StatelessWidget {
       trailing: playing
           ? const SizedBox(
               width: 64,
-              child: Center(
-                child: Icon(
-                  Icons.play_arrow,
-                ),
-              ),
+              child: Center(child: Icon(Icons.play_arrow)),
             )
           : (onRemove == null &&
-                  (!Platform.isAndroid || onToggleNotification == null)
-              ? null
-              : Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (Platform.isAndroid && onToggleNotification != null)
-                      IconButton(
-                        tooltip: notificationBusy
-                            ? '正在更新开播提醒'
-                            : (item.notifyLive ? '关闭开播提醒' : '开启开播提醒'),
-                        onPressed:
-                            notificationBusy ? null : onToggleNotification,
-                        icon: notificationBusy
-                            ? const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
+                    (!Platform.isAndroid || onToggleNotification == null)
+                ? null
+                : Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (Platform.isAndroid && onToggleNotification != null)
+                        IconButton(
+                          tooltip: notificationBusy
+                              ? '正在更新开播提醒'
+                              : (item.notifyLive ? '关闭开播提醒' : '开启开播提醒'),
+                          onPressed: notificationBusy
+                              ? null
+                              : onToggleNotification,
+                          icon: notificationBusy
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : Icon(
+                                  item.notifyLive
+                                      ? Icons.notifications_active
+                                      : Icons.notifications_none,
+                                  color: item.notifyLive
+                                      ? Theme.of(context).colorScheme.primary
+                                      : null,
                                 ),
-                              )
-                            : Icon(
-                                item.notifyLive
-                                    ? Icons.notifications_active
-                                    : Icons.notifications_none,
-                                color: item.notifyLive
-                                    ? Theme.of(context).colorScheme.primary
-                                    : null,
-                              ),
-                      ),
-                    if (onRemove != null)
-                      IconButton(
-                        tooltip: '取消关注',
-                        onPressed: onRemove,
-                        icon: const Icon(Remix.dislike_line),
-                      ),
-                  ],
-                )),
+                        ),
+                      if (onRemove != null)
+                        IconButton(
+                          tooltip: '取消关注',
+                          onPressed: onRemove,
+                          icon: const Icon(Remix.dislike_line),
+                        ),
+                    ],
+                  )),
       onTap: onTap,
       onLongPress: onLongPress,
     );
   }
 
-  String getStatus(int status) {
-    if (status == 0) {
-      return "读取中";
-    } else if (status == 1) {
-      return "未开播";
-    } else {
-      return "直播中";
-    }
+  String statusLabel({bool includeTime = false}) {
+    final value = item.liveStatus.value;
+    final issue = item.statusIssue.value;
+    final checked = item.lastStatusCheck;
+    final stale =
+        checked != null &&
+        DateTime.now().difference(checked) >= const Duration(hours: 1);
+    final label = value == 2
+        ? '直播中'
+        : value == 1
+        ? '未开播'
+        : '状态未知';
+    return '$label${stale
+            ? '（已过期）'
+            : issue == null
+            ? ''
+            : '（更新失败）'}'
+        '${includeTime && checked != null ? '，上次成功检查 ${checked.toLocal().toString().substring(0, 16)}' : ''}';
   }
 
   String formatLiveDuration(String? startTimeStampString) {

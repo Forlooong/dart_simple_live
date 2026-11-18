@@ -1,12 +1,29 @@
 import 'dart:io';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:simple_live_app/app/log.dart';
 import 'package:hive/hive.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
 import 'package:simple_live_app/services/live_notifications/notification_store.dart';
 import 'package:simple_live_app/services/live_notifications/notification_subscription.dart';
 
 void main() {
+  test('diagnostic exports contain only counts and fixed metadata', () {
+    final text = Log.diagnosticSummary(
+      [
+        '[ERROR] Cookie: synthetic-secret',
+        '[INFO] https://test.invalid/private?token=synthetic-secret',
+        'old log has synthetic-secret',
+      ],
+      version: '1.0',
+      platform: 'windows',
+      now: DateTime.utc(2026),
+    );
+    expect(text, contains('ERROR: 1'));
+    expect(text, contains('INFO: 1'));
+    expect(text, isNot(contains('synthetic-secret')));
+    expect(text, isNot(contains('test.invalid')));
+  });
   TestWidgetsFlutterBinding.ensureInitialized();
   late Directory directory;
   late LocalStorageService storage;
@@ -119,18 +136,18 @@ void main() {
         'CANARY-vault',
       );
       await store.writeConfig(
-        NotificationConfig(rooms: rooms, bilibiliCookie: 'CANARY-json'),
+        NotificationConfig(rooms: rooms),
       );
       expect(
         await File('${directory.path}/subscriptions.json').readAsString(),
         isNot(contains('CANARY')),
       );
-      expect((await store.readConfig()).bilibiliCookie, 'CANARY-vault');
+      expect(await store.readPlatformCookie('bilibili'), 'CANARY-vault');
       await storage.setValue(
         LocalStorageService.kBilibiliCookie,
         'CANARY-updated',
       );
-      expect((await store.readConfig()).bilibiliCookie, 'CANARY-updated');
+      expect(await store.readPlatformCookie('bilibili'), 'CANARY-updated');
     },
   );
 }

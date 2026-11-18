@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:archive/archive.dart';
+import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
 import 'package:hive/hive.dart';
@@ -23,10 +24,10 @@ class _Settings extends AppSettingsController {
 
 class _FailingHistoryDB extends DBService {
   @override
-  Future<void> importHistories(
-    Iterable<dynamic> data, {
-    required bool replace,
-  }) async {
+  Future<bool> replaceHistoriesIfCurrent(
+    List expected,
+    List replacement,
+  ) async {
     throw StateError('injected history failure');
   }
 }
@@ -78,7 +79,12 @@ void main() {
         LocalStorageService.kWebDAVUser: 'current-user',
         LocalStorageService.kThemeMode: 1,
       });
-      final backup = ZipDecoder().decodeBytes(await controller.createBackup());
+      final backupBytes = await controller.createBackup();
+      expect(
+        WebDavBackup.decode(backupBytes).has(RestoreGroup.settings),
+        isTrue,
+      );
+      final backup = ZipDecoder().decodeBytes(backupBytes);
       expect(
         backup.files.any((file) => file.name.contains('account')),
         isFalse,
@@ -120,6 +126,42 @@ void main() {
     },
   );
 
+  test('rejects a corrupted WebDAV document before exposing a preview', () {
+    final file = document(WebDavBackup.settingsFile, {'ThemeMode': 1})
+      ..crc32 = 0;
+    expect(
+      () => WebDavBackup.read(Archive()..addFile(file)),
+      throwsFormatException,
+    );
+  });
+
+  test(
+    'recovers a persisted checkpoint after an interrupted restore',
+    () async {
+      const key = LocalStorageService.kThemeMode;
+      await storage.setValue(key, 2);
+      final journal = await Hive.openBox<dynamic>('WebDavRestore');
+      final after = sha256
+          .convert(utf8.encode(jsonEncode({key: 2})))
+          .toString();
+      await journal.put('rollback', {
+        'current': <String, Object>{},
+        'pending': {
+          'settings': {
+            'before': {key: 1},
+            'after': after,
+          },
+        },
+      });
+      await journal.flush();
+      await journal.close();
+      final restore = WebDavRestore();
+      expect(await restore.hasRollback(), isTrue);
+      expect((await restore.rollback()).succeeded, ['设置']);
+      expect(storage.getValue(key, 0), 1);
+    },
+  );
+
   test(
     'bad settings are rejected before any backup category is written',
     () async {
@@ -143,10 +185,110 @@ void main() {
   );
 
   test(
+    'preview uses the local tag identity and keeps bells off by default',
+    () async {
+      final local = FollowUser(
+        id: 'douyu_1',
+        siteId: 'douyu',
+        roomId: '1',
+        userName: 'local',
+        face: '',
+        addTime: DateTime(2025),
+        notifyLive: true,
+      );
+      final incoming = FollowUser(
+        id: 'douyu_2',
+        siteId: 'douyu',
+        roomId: '2',
+        userName: 'remote',
+        face: '',
+        addTime: DateTime(2025),
+        notifyLive: true,
+      );
+      await database.importSnapshot(
+        follows: [local.toJson()],
+        tags: [
+          {
+            'id': 'local',
+            'tag': '收藏',
+            'userId': [local.id],
+          },
+        ],
+        replace: true,
+      );
+      final backup = WebDavBackup.read(
+        Archive()
+          ..addFile(document(WebDavBackup.followsFile, [incoming.toJson()]))
+          ..addFile(
+            document(WebDavBackup.tagsFile, [
+              {
+                'id': 'remote',
+                'tag': '收藏',
+                'userId': [incoming.id],
+              },
+            ]),
+          ),
+      );
+      final restore = WebDavRestore();
+      final preview = await restore.preview(backup);
+      final change = preview.change(RestoreGroup.follows, RestoreMode.merge);
+      expect(change.differences['关注']!.added, 1);
+      expect(change.differences['标签']!.added, 0);
+      expect(database.followBox.get(incoming.id), isNull);
+      expect((await restore.apply([change])).succeeded, ['关注和标签']);
+      expect(database.getFollowTagList().single.id, 'local');
+      expect(database.getFollowTagList().single.userId, [
+        local.id,
+        incoming.id,
+      ]);
+      expect(database.followBox.get(local.id)!.notifyLive, isTrue);
+      expect(database.followBox.get(incoming.id)!.notifyLive, isFalse);
+      await Hive.box('WebDavRestore').close();
+      expect((await WebDavRestore().rollback()).succeeded, ['关注和标签']);
+      expect(database.followBox.get(incoming.id), isNull);
+      expect(database.followBox.get(local.id)!.notifyLive, isTrue);
+    },
+  );
+
+  test(
+    'commit checks staleness and rollback preserves later changes',
+    () async {
+      const key = LocalStorageService.kThemeMode;
+      await storage.setValue(key, 1);
+      final backup = WebDavBackup.read(
+        Archive()
+          ..addFile(document(WebDavBackup.settingsFile, {key: 2}))
+          ..addFile(document(WebDavBackup.shieldFile, ['测试'])),
+      );
+      final restore = WebDavRestore();
+      var preview = await restore.preview(backup);
+      await storage.setValue(key, 0);
+      final stale = await restore.apply([
+        preview.change(RestoreGroup.settings, RestoreMode.merge),
+      ]);
+      expect(stale.skipped, ['设置']);
+      expect(await restore.hasRollback(), isFalse);
+      preview = await restore.preview(backup);
+      await restore.apply([
+        preview.change(RestoreGroup.settings, RestoreMode.merge),
+        preview.change(RestoreGroup.shield, RestoreMode.merge),
+      ]);
+      await storage.setValue(key, 1);
+      final undo = await restore.rollback();
+      expect(undo.skipped, ['设置']);
+      expect(undo.succeeded, ['屏蔽词']);
+      expect(storage.getValue(key, 0), 1);
+      expect(storage.shieldBox.isEmpty, isTrue);
+    },
+  );
+
+  test(
     'restore reports partial failure without claiming a full success',
     () async {
       await Get.delete<DBService>(force: true);
-      Get.put<DBService>(_FailingHistoryDB());
+      final failing = _FailingHistoryDB();
+      await failing.init();
+      Get.put<DBService>(failing);
       final archive = Archive()
         ..addFile(
           document('SimpleLive_histories.json', [
@@ -354,12 +496,22 @@ void main() {
     expect(settings.homeSort.length, Constant.allHomePages.length);
   });
 
-  test('unsupported platform is rejected before import can reach platform UI', () async {
-    final follow = FollowUser(id: 'unknown_1', siteId: 'unknown', roomId: '1',
-      userName: 'one', face: '', addTime: DateTime(2026));
-    await expectLater(database.importFollows([follow.toJson()], replace: true),
-        throwsFormatException);
-    expect(database.getFollowList(), isEmpty);
-  });
-
+  test(
+    'unsupported platform is rejected before import can reach platform UI',
+    () async {
+      final follow = FollowUser(
+        id: 'unknown_1',
+        siteId: 'unknown',
+        roomId: '1',
+        userName: 'one',
+        face: '',
+        addTime: DateTime(2026),
+      );
+      await expectLater(
+        database.importFollows([follow.toJson()], replace: true),
+        throwsFormatException,
+      );
+      expect(database.getFollowList(), isEmpty);
+    },
+  );
 }

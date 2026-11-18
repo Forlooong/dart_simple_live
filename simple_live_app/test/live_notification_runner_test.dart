@@ -7,15 +7,19 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:simple_live_app/services/live_notifications/live_check_runner.dart';
 import 'package:simple_live_app/services/live_notifications/notification_store.dart';
 import 'package:simple_live_app/services/live_notifications/notification_subscription.dart';
+import 'package:simple_live_core/simple_live_core.dart';
 
-NotificationSubscription _room(String roomId, {String generation = 'first'}) =>
-    NotificationSubscription(
-      id: 'bilibili_$roomId',
-      siteId: 'bilibili',
-      roomId: roomId,
-      userName: '主播 $roomId',
-      generation: generation,
-    );
+NotificationSubscription _room(
+  String roomId, {
+  String generation = 'first',
+  String site = 'bilibili',
+}) => NotificationSubscription(
+  id: '${site}_$roomId',
+  siteId: site,
+  roomId: roomId,
+  userName: '主播 $roomId',
+  generation: generation,
+);
 
 Map<String, dynamic> _copy(Map<String, dynamic> value) =>
     Map<String, dynamic>.from(jsonDecode(jsonEncode(value)) as Map);
@@ -24,12 +28,13 @@ Map<String, dynamic> _copy(Map<String, dynamic> value) =>
 // state through a reference returned from an earlier read.
 class _MemoryStore implements NotificationStore {
   _MemoryStore(List<NotificationSubscription> rooms)
-      : config = NotificationConfig(rooms: rooms);
+    : config = NotificationConfig(rooms: rooms);
 
   NotificationConfig config;
   Map<String, dynamic> _state = {};
   Future<void> Function()? afterWrite;
   Future<void> Function()? beforeReadConfig;
+  int writes = 0;
 
   @override
   Future<NotificationConfig> readConfig() async {
@@ -42,6 +47,7 @@ class _MemoryStore implements NotificationStore {
 
   @override
   Future<void> writeState(Map<String, dynamic> state) async {
+    writes++;
     _state = _copy(state);
     await afterWrite?.call();
   }
@@ -56,16 +62,18 @@ LiveCheckRunner _runner(
   Duration budget = const Duration(minutes: 7),
   LiveAlert? show,
   Stopwatch Function()? createStopwatch,
-}) =>
-    LiveCheckRunner(
-      store: store,
-      check: check,
-      show: show ?? (room) async => shown?.add(room.id),
-      cancel: (room) async => cancelled?.add(room.id),
-      roomTimeout: roomTimeout,
-      budget: budget,
-      createStopwatch: createStopwatch,
-    );
+  DateTime Function()? now,
+}) => LiveCheckRunner(
+  store: store,
+  check: check,
+  show: show ?? (room) async => shown?.add(room.id),
+  cancel: (room) async => cancelled?.add(room.id),
+  roomTimeout: roomTimeout,
+  budget: budget,
+  platformSpacing: Duration.zero,
+  createStopwatch: createStopwatch,
+      now: now,
+);
 
 // Drive elapsed time separately from Flutter's fake timers to reproduce a
 // budget timer firing while the monotonic clock still reads just below it.
@@ -102,6 +110,134 @@ Future<Directory> _temporaryDirectory() async {
 void main() {
   setUp(() { FlutterSecureStorage.setMockInitialValues({}); });
   group('LiveCheckRunner', () {
+    test('authentication backoff survives a worker restart until the vault revision changes', () async {
+      final room = _room('a');
+      final store = _MemoryStore([room]);
+      await _runner(store, check: (_) async => throw CoreError(
+        'expired', kind: CoreErrorKind.authRequired,
+      )).run();
+      var requests = 0;
+      final runner = _runner(store, check: (_) async {
+        requests++;
+        return false;
+      });
+      await runner.run();
+      expect(requests, 0);
+      store.config = NotificationConfig(
+        rooms: [room],
+        credentialRevisions: const {'bilibili': 1},
+      );
+      await runner.run();
+      expect(requests, 1);
+    });
+
+    test('limits one platform without delaying the other platforms', () async {
+      final limited = _room('first');
+      final skipped = _room('second');
+      final other = _room('other', site: 'huya');
+      final store = _MemoryStore([limited, skipped, other]);
+      final started = <String>[];
+      await _runner(
+        store,
+        check: (room) async {
+          started.add(room.id);
+          if (room.id == limited.id)
+            throw CoreError('limited', kind: CoreErrorKind.rateLimited);
+          return false;
+        },
+      ).run();
+      expect(started, unorderedEquals([limited.id, other.id]));
+      final state = await store.readState();
+      expect(state['platforms']['bilibili']['error'], 'rateLimited');
+      expect(state['platforms']['huya']['succeeded'], 1);
+    });
+
+    test('quiet hours group still-live rooms after midnight, once', () async {
+      final active = _room('active');
+      final snoozed = _room('snoozed', generation: 'second');
+      final store = _MemoryStore([active, snoozed]);
+      var now = DateTime(2026, 1, 2, 22, 58);
+      store.config = NotificationConfig(
+        rooms: [active, snoozed],
+        quietHours: const QuietHours(23 * 60, 7 * 60, summary: true),
+        preferences: {
+          snoozed.generation: ReminderPreference(
+            snoozedUntil: now.add(const Duration(days: 1)),
+          ),
+        },
+      );
+      final sent = <String>[];
+      final summaries = <int>[];
+      var live = false;
+      Future<void> poll() => LiveCheckRunner(
+        store: store,
+        check: (_) async => live,
+        show: (room) async => sent.add(room.id),
+        cancel: (_) async {},
+        showSummary: (count) async => summaries.add(count),
+        platformSpacing: Duration.zero,
+        now: () => now,
+      ).run();
+      await poll();
+      live = true;
+      now = DateTime(2026, 1, 3, 1);
+      await poll();
+      expect(sent, isEmpty);
+      expect(summaries, isEmpty);
+      now = DateTime(2026, 1, 3, 7, 5);
+      await poll();
+      await poll();
+      expect(sent, isEmpty);
+      expect(summaries, [1]);
+    });
+
+    test('100-room simulation improves serial polling and state writes', () async {
+      final rooms = [
+        for (final site in LiveCheckRunner.supportedSites)
+          for (var i = 0; i < 25; i++) _room('$i', site: site),
+      ];
+      const latency = Duration(milliseconds: 100);
+      final original = _MemoryStore(rooms);
+      var serialRequests = 0;
+      final serialClock = Stopwatch()..start();
+      final serialState = {'rooms': <String, Object>{}};
+      // The baseline runner checks serially, writes each success, and flushes at round end.
+      for (final room in rooms) {
+        if (!(await original.readConfig()).contains(room)) continue;
+        await Future<void>.delayed(latency);
+        serialRequests++;
+        if (!(await original.readConfig()).contains(room)) continue;
+        serialState['rooms']![room.id] = {'live': false};
+        await original.writeState(serialState);
+      }
+      await original.writeState(serialState);
+      serialClock.stop();
+      final updated = _MemoryStore(rooms);
+      var parallelRequests = 0;
+      final parallelClock = Stopwatch()..start();
+      await LiveCheckRunner(
+        store: updated,
+        check: (_) async {
+          parallelRequests++;
+          await Future<void>.delayed(latency);
+          return false;
+        },
+        show: (_) async {},
+        cancel: (_) async {},
+      ).run();
+      parallelClock.stop();
+      final coverage = ((await updated.readState())['rooms'] as Map).length;
+      expect(coverage, 100);
+      expect(parallelRequests, serialRequests);
+      expect(parallelClock.elapsed, lessThan(serialClock.elapsed));
+      expect(updated.writes, lessThan(original.writes));
+      // Show the measured comparison in the expanded test report.
+      print(
+        '100 rooms: ${serialClock.elapsedMilliseconds} → ${parallelClock.elapsedMilliseconds} ms, '
+        '$serialRequests → $parallelRequests requests, ${original.writes} → ${updated.writes} writes, '
+        '$coverage/100 completed',
+      );
+    });
     test('an empty selection never checks or alerts', () async {
       final checked = <String>[];
       final shown = <String>[];
@@ -153,15 +289,18 @@ void main() {
         final room = _room('a');
         final store = _MemoryStore([room]);
         final shown = <String>[];
+        var now = DateTime.utc(2026);
         await _runner(store, check: (_) async => previousLive).run();
         await _runner(
           store,
           check: (_) async => throw const SocketException('unavailable'),
           shown: shown,
+          now: () => now,
         ).run();
         expect(
             (await store.readState())['rooms'][room.id]['live'], previousLive);
-        await _runner(store, check: (_) async => true, shown: shown).run();
+        now = now.add(const Duration(seconds: 30));
+        await _runner(store, check: (_) async => true, shown: shown, now: () => now).run();
         expect(shown, previousLive ? isEmpty : [room.id]);
       });
     }
@@ -468,13 +607,9 @@ void main() {
       final reader = FileNotificationStore(directory);
       final old = NotificationConfig(
         rooms: [_room('old')],
-        bilibiliCookie: 'old cookie',
-        douyinCookie: 'old second cookie',
       );
       final next = NotificationConfig(
         rooms: [_room('new', generation: 'new generation')],
-        bilibiliCookie: 'new cookie',
-        douyinCookie: 'new second cookie',
       );
       await writer.writeConfig(old);
       expect(await File('${directory.path}/subscriptions.json').readAsString(),

@@ -101,6 +101,14 @@ class LiveRoomStatusCache {
     _pending.clear();
   }
 
+  LiveRoomStatus? peek(String roomId, int version) {
+    final entry = _values[(roomId, version)];
+    return entry != null &&
+            _now().difference(entry.$1) < const Duration(seconds: 30)
+        ? entry.$2
+        : null;
+  }
+
   Future<LiveRoomStatus> get(
     String roomId,
     int configurationVersion,

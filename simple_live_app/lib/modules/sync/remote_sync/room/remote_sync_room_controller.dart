@@ -127,8 +127,8 @@ class RemoteSyncRoomController extends BaseController {
       EventBus.instance.emit(Constant.kUpdateFollow, 0);
       SmartDialog.showToast("已同步关注列表");
     } catch (e) {
-      SmartDialog.showToast("同步失败:$e");
-      Log.logPrint(e);
+      SmartDialog.showToast("同步失败，请重试");
+      Log.w("远程房间同步失败");
     }
   }
 
@@ -139,8 +139,8 @@ class RemoteSyncRoomController extends BaseController {
       SmartDialog.showToast('已同步历史记录');
       EventBus.instance.emit(Constant.kUpdateHistory, 0);
     } catch (e) {
-      SmartDialog.showToast("同步失败:$e");
-      Log.logPrint(e);
+      SmartDialog.showToast("同步失败，请重试");
+      Log.w("远程房间同步失败");
     }
   }
 
@@ -148,11 +148,13 @@ class RemoteSyncRoomController extends BaseController {
     try {
       final jsonBody = json.decode(data) as List;
       await AppSettingsController.instance.importShieldRules(
-          jsonBody, replace: overlay);
+        jsonBody,
+        replace: overlay,
+      );
       SmartDialog.showToast('已同步屏蔽词');
     } catch (e) {
-      SmartDialog.showToast("同步失败:$e");
-      Log.logPrint(e);
+      SmartDialog.showToast("同步失败，请重试");
+      Log.w("远程房间同步失败");
     }
   }
 
@@ -160,12 +162,20 @@ class RemoteSyncRoomController extends BaseController {
     try {
       var jsonBody = json.decode(data);
       var cookie = jsonBody['cookie'];
+      if (cookie is! String ||
+          cookie.isEmpty ||
+          cookie.length > 65536 ||
+          !await Utils.showAlertDialog(
+            '同步房间送来了哔哩哔哩会话。继续会替换当前账号。',
+            title: '接收哔哩哔哩账号',
+          ))
+        return;
       await BiliBiliAccountService.instance.setCookie(cookie);
       await BiliBiliAccountService.instance.loadUserInfo();
       SmartDialog.showToast('已同步哔哩哔哩账号');
     } catch (e) {
-      SmartDialog.showToast("同步失败:$e");
-      Log.logPrint(e);
+      SmartDialog.showToast("同步失败，请重试");
+      Log.w("远程房间同步失败");
     }
   }
 
@@ -200,11 +210,11 @@ class RemoteSyncRoomController extends BaseController {
       if (resp.isSuccess) {
         SmartDialog.showToast("已发送关注列表");
       } else {
-        SmartDialog.showToast("发送失败:${resp.message}");
+        SmartDialog.showToast("发送失败，请重试");
       }
     } catch (e) {
       SmartDialog.showToast("发送失败:$e");
-      Log.logPrint(e);
+      Log.w("远程房间同步失败");
     } finally {
       SmartDialog.dismiss();
     }
@@ -229,11 +239,11 @@ class RemoteSyncRoomController extends BaseController {
       if (resp.isSuccess) {
         SmartDialog.showToast("已发送历史记录");
       } else {
-        SmartDialog.showToast("发送失败:${resp.message}");
+        SmartDialog.showToast("发送失败，请重试");
       }
     } catch (e) {
       SmartDialog.showToast("发送失败:$e");
-      Log.logPrint(e);
+      Log.w("远程房间同步失败");
     } finally {
       SmartDialog.dismiss();
     }
@@ -259,11 +269,11 @@ class RemoteSyncRoomController extends BaseController {
       if (resp.isSuccess) {
         SmartDialog.showToast("已发送屏蔽词");
       } else {
-        SmartDialog.showToast("发送失败:${resp.message}");
+        SmartDialog.showToast("发送失败，请重试");
       }
     } catch (e) {
       SmartDialog.showToast("发送失败:$e");
-      Log.logPrint(e);
+      Log.w("远程房间同步失败");
     } finally {
       SmartDialog.dismiss();
     }
@@ -279,6 +289,19 @@ class RemoteSyncRoomController extends BaseController {
         SmartDialog.showToast("未登录哔哩哔哩");
         return;
       }
+      final room = currentRoomId.value;
+      final peers = roomUsers.map((peer) => peer.connectionId).toSet();
+      if (!await Utils.showAlertDialog(
+        '将通过 ${Uri.parse(SignalRService.kUrl).host} 中转，把哔哩哔哩会话发送给房间 $room 内已连接的设备。',
+        title: '发送哔哩哔哩账号',
+      ))
+        return;
+      if (room != currentRoomId.value ||
+          !roomUsers.every((peer) => peers.contains(peer.connectionId)) ||
+          roomUsers.length != peers.length) {
+        SmartDialog.showToast('房间设备已变化，请重新确认');
+        return;
+      }
       SmartDialog.showLoading(msg: "发送中...");
 
       var resp = await signalR.sendContent(
@@ -292,11 +315,11 @@ class RemoteSyncRoomController extends BaseController {
       if (resp.isSuccess) {
         SmartDialog.showToast("已发送哔哩哔哩账号");
       } else {
-        SmartDialog.showToast("发送失败:${resp.message}");
+        SmartDialog.showToast("发送失败，请重试");
       }
     } catch (e) {
-      SmartDialog.showToast("同步失败:$e");
-      Log.logPrint(e);
+      SmartDialog.showToast("同步失败，请重试");
+      Log.w("远程房间同步失败");
     } finally {
       SmartDialog.dismiss();
     }

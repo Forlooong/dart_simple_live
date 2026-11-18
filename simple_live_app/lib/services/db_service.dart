@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:get/get.dart';
 import 'package:hive/hive.dart';
@@ -376,7 +377,9 @@ class DBService extends GetxService {
 
   FollowUser _copyFollow(FollowUser user) => FollowUser.fromJson(user.toJson())
     ..liveStatus = user.liveStatus
-    ..liveStartTime = user.liveStartTime;
+    ..liveStartTime = user.liveStartTime
+    ..lastStatusCheck = user.lastStatusCheck
+    ..statusIssue.value = user.statusIssue.value;
 
   Future<void> importTags(Iterable<dynamic> data, {required bool replace}) =>
       importSnapshot(tags: data, replace: replace);
@@ -384,13 +387,42 @@ class DBService extends GetxService {
   Future<void> importFollows(Iterable<dynamic> data, {required bool replace}) =>
       importSnapshot(follows: data, replace: replace);
 
+  Map<String, Object> _snapshot() {
+    final follows = getFollowList()..sort((a, b) => a.id.compareTo(b.id));
+    return {
+      'follows': follows.map((user) => user.toJson()).toList(),
+      'tags': getFollowTagList().map((tag) => tag.toJson()).toList(),
+    };
+  }
+
   Future<Map<String, Object>> exportSnapshot() =>
       _serializeTagMutation(() async {
         await _ensureTagStorage();
-        return {
-          'follows': getFollowList().map((user) => user.toJson()).toList(),
-          'tags': getFollowTagList().map((tag) => tag.toJson()).toList(),
-        };
+        return _snapshot();
+      });
+
+  Future<bool> replaceSnapshotIfCurrent(Map expected, Map replacement) =>
+      _serializeTagMutation(() async {
+        await _ensureTagStorage();
+        if (jsonEncode(_snapshot()) != jsonEncode(expected)) return false;
+        final parsed = _parseSnapshot(
+          follows: replacement['follows'] as List,
+          tags: replacement['tags'] as List,
+        );
+        final follows = <String, FollowUser>{};
+        for (final raw in parsed.follows!) {
+          final user = FollowUser.fromJson(raw);
+          final current = followBox.get(user.id);
+          if (current != null) {
+            user.liveStatus = current.liveStatus;
+            user.liveStartTime = current.liveStartTime;
+            user.lastStatusCheck = current.lastStatusCheck;
+            user.statusIssue.value = current.statusIssue.value;
+          }
+          follows[user.id] = user;
+        }
+        await _commitSnapshot(follows, parsed.tags, parsed.tags.keys.toList());
+        return true;
       });
 
   static void validateSnapshot({
@@ -686,20 +718,45 @@ class DBService extends GetxService {
             ? old
             : entry.value;
       }
-      final previous = existing.values.map((item) => item.toJson()).toList();
+      await _commitHistories(next);
+    });
+  }
+
+  List<Map<String, dynamic>> _historySnapshot() {
+    final items = historyBox.values.toList()
+      ..sort((a, b) => a.id.compareTo(b.id));
+    return items.map((item) => item.toJson()).toList();
+  }
+
+  Future<List<Map<String, dynamic>>> exportHistorySnapshot() =>
+      _serializeTagMutation(() async {
+        await _recoverHistoryImport();
+        return _historySnapshot();
+      });
+
+  Future<bool> replaceHistoriesIfCurrent(List expected, List replacement) =>
+      _serializeTagMutation(() async {
+        await _recoverHistoryImport();
+        if (jsonEncode(_historySnapshot()) != jsonEncode(expected))
+          return false;
+        await _commitHistories(parseHistories(replacement));
+        return true;
+      });
+
+  Future<void> _commitHistories(Map<String, History> next) async {
+    final previous = _historySnapshot();
+    await _historyImportBox!.put('previous', previous);
+    await _historyImportBox!.flush();
+    try {
+      await _replaceHistories(next);
+      await _historyImportBox!.delete('previous');
+      await _historyImportBox!.flush();
+    } catch (_) {
       await _historyImportBox!.put('previous', previous);
       await _historyImportBox!.flush();
-      try {
-        await _replaceHistories(next);
-        await _historyImportBox!.delete('previous');
-        await _historyImportBox!.flush();
-      } catch (_) {
-        await _historyImportBox!.put('previous', previous);
-        await _historyImportBox!.flush();
-        await _recoverHistoryImport();
-        rethrow;
-      }
-    });
+      await _recoverHistoryImport();
+      rethrow;
+    }
   }
 
   List<History> getHistores() {

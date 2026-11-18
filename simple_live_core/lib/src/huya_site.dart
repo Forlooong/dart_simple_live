@@ -456,8 +456,10 @@ class HuyaSite extends LiveSite {
   }
 
   @override
-  Future<LiveSearchRoomResult> searchRooms(String keyword,
-      {int page = 1}) async {
+  Future<LiveSearchRoomResult> searchRooms(
+    String keyword, {
+    int page = 1,
+  }) async {
     var resultText = await HttpClient.instance.getJson(
       "https://search.cdn.huya.com/",
       queryParameters: {
@@ -491,6 +493,9 @@ class HuyaSite extends LiveSite {
         cover: cover,
         userName: item["game_nick"].toString(),
         online: int.tryParse(item["game_total_count"].toString()) ?? 0,
+        liveStatus: item['gameLiveOn'] is bool
+            ? item['gameLiveOn'] as bool
+            : null,
       );
       items.add(roomItem);
     }
@@ -499,8 +504,10 @@ class HuyaSite extends LiveSite {
   }
 
   @override
-  Future<LiveSearchAnchorResult> searchAnchors(String keyword,
-      {int page = 1}) async {
+  Future<LiveSearchAnchorResult> searchAnchors(
+    String keyword, {
+    int page = 1,
+  }) async {
     var resultText = await HttpClient.instance.getJson(
       "https://search.cdn.huya.com/",
       queryParameters: {
@@ -522,7 +529,8 @@ class HuyaSite extends LiveSite {
         roomId: item["room_id"].toString(),
         avatar: item["game_avatarUrl180"].toString(),
         userName: item["game_nick"].toString(),
-        liveStatus: item["gameLiveOn"],
+        liveStatus: item['gameLiveOn'] == true || item['gameLiveOn'] == 1,
+        statusKnown: const {true, false, 0, 1}.contains(item['gameLiveOn']),
       );
       items.add(anchorItem);
     }

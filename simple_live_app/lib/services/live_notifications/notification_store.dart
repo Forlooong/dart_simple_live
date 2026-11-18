@@ -36,24 +36,18 @@ class FileNotificationStore implements NotificationStore {
   Future<NotificationConfig> readConfig() async {
     final json = await _read('subscriptions');
     if (json.isEmpty) return const NotificationConfig();
-    final parsed = NotificationConfig.fromJson(json);
-    // Workers read the same platform vault as the foreground process. Cookies
-    // never travel through the ordinary subscription JSON (including legacy JSON).
-    return NotificationConfig(
-      rooms: parsed.rooms,
-      bilibiliCookie: parsed.rooms.any((room) => room.siteId == 'bilibili')
-          ? await LocalStorageService.secureStorage.read(
-                  key: LocalStorageService.kBilibiliCookie,
-                ) ??
-                ''
-          : '',
-      douyinCookie: parsed.rooms.any((room) => room.siteId == 'douyin')
-          ? await LocalStorageService.secureStorage.read(
-                  key: LocalStorageService.kDouyinCookie,
-                ) ??
-                ''
-          : '',
-    );
+    return NotificationConfig.fromJson(json);
+  }
+
+  Future<String> readPlatformCookie(String siteId) async {
+    final key = switch (siteId) {
+      'bilibili' => LocalStorageService.kBilibiliCookie,
+      'douyin' => LocalStorageService.kDouyinCookie,
+      _ => null,
+    };
+    return key == null
+        ? ''
+        : await LocalStorageService.secureStorage.read(key: key) ?? '';
   }
 
   Future<void> writeConfig(NotificationConfig config) =>

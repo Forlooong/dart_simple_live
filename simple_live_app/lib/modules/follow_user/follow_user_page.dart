@@ -13,6 +13,8 @@ import 'package:simple_live_app/models/db/follow_user_tag.dart';
 import 'package:simple_live_app/modules/follow_user/follow_user_controller.dart';
 import 'package:simple_live_app/routes/app_navigation.dart';
 import 'package:simple_live_app/services/follow_service.dart';
+import 'package:simple_live_app/services/live_notification_service.dart';
+import 'package:simple_live_app/modules/follow_user/live_reminder_center.dart';
 import 'package:simple_live_app/widgets/filter_button.dart';
 import 'package:simple_live_app/widgets/follow_user_item.dart';
 import 'package:simple_live_app/widgets/page_grid_view.dart';
@@ -28,6 +30,12 @@ class FollowUserPage extends GetView<FollowUserController> {
       appBar: AppBar(
         title: const Text("关注用户"),
         actions: [
+          if (Platform.isAndroid)
+            IconButton(
+              tooltip: '开播提醒中心',
+              icon: const Icon(Icons.notifications_outlined),
+              onPressed: () => Get.to<void>(() => const LiveReminderCenter()),
+            ),
           if (Platform.isAndroid)
             IconButton(
               tooltip: '开播提醒说明',
@@ -164,10 +172,18 @@ class FollowUserPage extends GetView<FollowUserController> {
               pageController: controller,
               firstRefresh: true,
               showPCRefreshButton: false,
+              findChildIndexCallback: (key) {
+                final index = controller.list.indexWhere(
+                  (room) => room.id == (key as ValueKey<String>).value,
+                );
+                return index < 0 ? null : index;
+              },
               itemBuilder: (_, i) {
                 var item = controller.list[i];
                 var site = Sites.allSites[item.siteId]!;
-                return Obx(
+                return KeyedSubtree(
+                  key: ValueKey(item.id),
+                  child: Obx(
                   () => FollowUserItem(
                     item: item,
                     notificationBusy:
@@ -186,6 +202,7 @@ class FollowUserPage extends GetView<FollowUserController> {
                       setFollowTagDialog(item);
                     },
                   ),
+                  ),
                 );
               },
             ),
@@ -199,14 +216,28 @@ class FollowUserPage extends GetView<FollowUserController> {
     Get.dialog(
       AlertDialog(
         title: const Text('开播提醒'),
-        content: const SingleChildScrollView(
-          child: Text(
-            '点亮直播间旁的铃铛，只为选中的直播间提醒。\n\n'
-            '手机约每 15 分钟检查一次。锁屏、省电或系统限制可能延迟，'
-            '短暂开播也可能错过。首次检查只记录当前状态，不补发已在直播的提醒。\n\n'
-            '划掉应用后，是否继续检查由系统决定；强行停止后需重新打开应用。\n\n'
-            '三星手机建议将本应用移出“深度休眠应用”，并允许通知。\n\n'
-            '无需服务器或 Google 服务。',
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '点亮直播间旁的铃铛，只为选中的直播间提醒。\n\n'
+                '手机约每 15 分钟检查一次。锁屏、省电或系统限制可能延迟，'
+                '短暂开播也可能错过。首次检查只记录当前状态，不补发已在直播的提醒。\n\n'
+                '划掉应用后，是否继续检查由系统决定；强行停止后需重新打开应用。\n\n'
+                '三星手机建议将本应用移出“深度休眠应用”，并允许通知。\n\n'
+                '无需服务器或 Google 服务。',
+              ),
+              const SizedBox(height: 12),
+              FutureBuilder<List<String>>(
+                future: LiveNotificationService.instance.platformDiagnostics(),
+                builder: (context, snapshot) => Text(
+                  snapshot.data?.join('\n') ?? '正在读取检查记录',
+                  semanticsLabel: snapshot.data?.join('。'),
+                ),
+              ),
+            ],
           ),
         ),
         actions: [
@@ -223,10 +254,7 @@ class FollowUserPage extends GetView<FollowUserController> {
             },
             child: const Text('通知设置'),
           ),
-          TextButton(
-            onPressed: () => Get.back(),
-            child: const Text('知道了'),
-          ),
+          TextButton(onPressed: () => Get.back(), child: const Text('知道了')),
         ],
       ),
     );

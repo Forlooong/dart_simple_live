@@ -1,4 +1,5 @@
 import 'dart:async';
+
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:get/get.dart';
 import 'package:hive/hive.dart';
@@ -162,6 +163,7 @@ class LocalStorageService extends GetxService {
 
   /// WebDAV_登录账号
   static const String kWebDAVUser = "WebDAVUser";
+  static const String kWebDAVConfirmedTarget = "WebDAVConfirmedTarget";
 
   /// WebDAV_登录密码
   static const String kWebDAVPassword = "kWebDAVPassword";
@@ -256,8 +258,13 @@ class LocalStorageService extends GetxService {
     return result;
   }
 
-  Map<String, dynamic> exportSettings() =>
-      validateSettings(settingsBox.toMap());
+  Map<String, dynamic> exportSettings() {
+    final values = validateSettings(settingsBox.toMap());
+    return {
+      for (final key in backupKeys.keys)
+        if (values.containsKey(key)) key: values[key],
+    };
+  }
 
   Future<void> _preferenceWrites = Future.value();
 
@@ -270,10 +277,17 @@ class LocalStorageService extends GetxService {
     return result;
   }
 
-  Future<void> restoreSettings(Map data, {bool replace = false}) {
+  Future<bool> restoreSettings(
+    Map data, {
+    bool replace = false,
+    Map? expected,
+  }) {
     final values = validateSettings(data);
     return _serializePreferences(() async {
       await recoverSettingsRestore();
+      if (expected != null && !_sameSettings(exportSettings(), expected)) {
+        return false;
+      }
       final affected = replace ? backupKeys.keys : values.keys;
       final previous = {
         for (final key in affected)
@@ -303,8 +317,17 @@ class LocalStorageService extends GetxService {
         await recoverSettingsRestore();
         rethrow;
       }
+      return true;
     });
   }
+
+  bool _sameSettings(Map current, Map expected) =>
+      current.length == expected.length &&
+      current.entries.every(
+        (entry) =>
+            expected.containsKey(entry.key) &&
+            expected[entry.key] == entry.value,
+      );
 
   Future<void> recoverSettingsRestore() async {
     final pending = settingsBox.get('_pendingSettingsRestore');
@@ -370,11 +393,17 @@ class LocalStorageService extends GetxService {
     Iterable<dynamic> data, {
     required bool replace,
     String? remove,
+    Set<String>? expected,
   }) {
     final incoming = validateShieldRules(data);
     final result = _shieldWrites.then((_) async {
       await recoverShieldRules();
       final previous = Map<dynamic, String>.from(shieldBox.toMap());
+      if (expected != null &&
+          (previous.values.toSet().length != expected.length ||
+              !previous.values.every(expected.contains))) {
+        throw const ShieldRulesChanged();
+      }
       final next = <String>{if (!replace) ...previous.values, ...incoming};
       if (remove != null) next.remove(remove);
       if (remove == null) validateShieldRules(next);
@@ -465,4 +494,8 @@ class LocalStorageService extends GetxService {
     if (credentialKeys.contains(key)) return setValue(key, '');
     return await _serializePreferences(() => settingsBox.delete(key));
   }
+}
+
+class ShieldRulesChanged implements Exception {
+  const ShieldRulesChanged();
 }

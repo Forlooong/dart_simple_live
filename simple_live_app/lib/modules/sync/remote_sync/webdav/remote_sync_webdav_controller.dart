@@ -3,42 +3,31 @@ import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
-import 'package:simple_live_app/app/constant.dart';
 import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/app/controller/base_controller.dart';
-import 'package:simple_live_app/app/event_bus.dart';
 import 'package:simple_live_app/app/log.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/modules/sync/remote_sync/webdav/webdav_client.dart';
 import 'package:simple_live_app/services/bilibili_account_service.dart';
 import 'package:simple_live_app/services/db_service.dart';
 import 'package:simple_live_app/services/local_storage_service.dart';
-import 'package:simple_live_core/simple_live_core.dart'
-    show validateShieldRules;
+
+import 'webdav_restore.dart';
+
+export 'webdav_restore.dart';
 
 class RemoteSyncWebDAVController extends BaseController {
   // ui
   var passwordVisible = true.obs;
-  // ui-用户选择是否同步
-  var isSyncFollows = true.obs;
-  var isSyncHistories = true.obs;
-  var isSyncBlockWord = true.obs;
-  var isSyncBilibiliAccount = false.obs;
   bool _busy = false;
 
   late DAVClient davClient;
   var user = "--".obs;
   var lastRecoverTime = "--".obs;
   var lastUploadTime = "--".obs;
-
-  final _userFollowJsonName = 'SimpleLive_follows.json';
-  final _userHistoriesJsonName = 'SimpleLive_histories.json';
-  final _userBlockedWordJsonName = 'SimpleLive_blocked_word.json';
-  final _userBilibiliAccountJsonName = 'SimpleLive_bilibili_account.json';
-  final _userSettingsJsonName = 'SimpleLive_Settings.json';
-  final _userTagsJsonName = 'SimpleLive_Tags.json';
 
   @override
   void onInit() {
@@ -64,6 +53,18 @@ class RemoteSyncWebDAVController extends BaseController {
         LocalStorageService.kWebDAVPassword,
         "",
       );
+      final target = Uri.tryParse(uri);
+      final confirmed = LocalStorageService.instance.getValue(
+        LocalStorageService.kWebDAVConfirmedTarget,
+        '',
+      );
+      if (target == null ||
+          !_validTarget(target) ||
+          ((target.scheme == 'http' || confirmed.isNotEmpty) &&
+              confirmed != target.toString())) {
+        notLogin.value = true;
+        return;
+      }
       davClient = DAVClient(uri, user.value, password);
       // 从未同步过默认为最新数据
       lastRecoverTime.value = Utils.parseTime(
@@ -92,11 +93,18 @@ class RemoteSyncWebDAVController extends BaseController {
       // 返回登录结果
       bool value = await davClient.pingCompleter.future;
       notLogin.value = !value;
-    } catch (e) {
-      Log.e("$e", StackTrace.current);
+    } catch (_, stack) {
+      Log.e("WebDAV 连接失败", stack);
       notLogin.value = true;
     }
   }
+
+  bool _validTarget(Uri uri) =>
+      (uri.scheme == 'https' || uri.scheme == 'http') &&
+      uri.host.isNotEmpty &&
+      uri.userInfo.isEmpty &&
+      !uri.hasQuery &&
+      !uri.hasFragment;
 
   // WebDAV登录
   Future<void> doWebDAVLogin(
@@ -104,6 +112,22 @@ class RemoteSyncWebDAVController extends BaseController {
     String webDAVUser,
     String webDAVPassword,
   ) async {
+    final uri = Uri.tryParse(webDAVUri.trim());
+    if (uri == null || !_validTarget(uri)) {
+      SmartDialog.showToast('请输入有效的 WebDAV 地址');
+      return;
+    }
+    final stored = LocalStorageService.instance.getValue(
+      LocalStorageService.kWebDAVUri,
+      '',
+    );
+    if (stored != uri.toString() || uri.scheme == 'http') {
+      final message = uri.scheme == 'http'
+          ? '将通过未加密的 HTTP 向 ${uri.origin} 发送 WebDAV 登录凭据。'
+          : '将向 ${uri.origin} 发送 WebDAV 登录凭据。';
+      if (!await Utils.showAlertDialog(message, title: '确认 WebDAV 服务')) return;
+    }
+    webDAVUri = uri.toString();
     // 确认登录
     davClient = DAVClient(webDAVUri, webDAVUser, webDAVPassword);
     await checkIsLogin();
@@ -116,6 +140,10 @@ class RemoteSyncWebDAVController extends BaseController {
       await LocalStorageService.instance.setValue(
         LocalStorageService.kWebDAVUser,
         webDAVUser,
+      );
+      await LocalStorageService.instance.setValue(
+        LocalStorageService.kWebDAVConfirmedTarget,
+        webDAVUri,
       );
       user.value = webDAVUser;
       await LocalStorageService.instance.setValue(
@@ -146,6 +174,9 @@ class RemoteSyncWebDAVController extends BaseController {
       await LocalStorageService.instance.setValue(
         LocalStorageService.kWebDAVPassword,
         "",
+      );
+      await LocalStorageService.instance.removeValue(
+        LocalStorageService.kWebDAVConfirmedTarget,
       );
       notLogin.value = true;
     }
@@ -183,178 +214,247 @@ class RemoteSyncWebDAVController extends BaseController {
     }
 
     final snapshot = await DBService.instance.exportSnapshot();
-    add(_userFollowJsonName, snapshot['follows']!);
-    add(_userTagsJsonName, snapshot['tags']!);
+    add(WebDavBackup.followsFile, snapshot['follows']!);
+    add(WebDavBackup.tagsFile, snapshot['tags']!);
     add(
-      _userHistoriesJsonName,
+      WebDavBackup.historyFile,
       DBService.instance.getHistores().map((item) => item.toJson()).toList(),
     );
     add(
-      _userBlockedWordJsonName,
+      WebDavBackup.shieldFile,
       AppSettingsController.instance.shieldList.toList(),
     );
-    add(_userSettingsJsonName, LocalStorageService.instance.exportSettings());
+    add(
+      WebDavBackup.settingsFile,
+      LocalStorageService.instance.exportSettings(),
+    );
     return ZipEncoder().encode(archive);
+  }
+
+  Future<WebDavBackup> _downloadBackup({bool accountOnly = false}) async {
+    final data = await davClient.recovery();
+    if (data.length > WebDavBackup.maxSize) {
+      throw const FormatException('备份文件过大');
+    }
+    return Isolate.run(
+      () => WebDavBackup.decode(data, accountOnly: accountOnly),
+    );
   }
 
   Future<void> doWebDAVRecovery() async {
     if (_busy) return;
     _busy = true;
-    SmartDialog.showLoading(msg: "正在恢复到本地");
     try {
-      final data = await davClient.recovery();
-      if (data.length > 32 * 1024 * 1024) {
-        throw const FormatException('Backup too large');
-      }
-      final archive = await Isolate.run<Archive>(
-        () => ZipDecoder().decodeBytes(data, verify: true),
+      SmartDialog.showLoading(msg: '正在读取备份');
+      final preview = await (() async {
+        try {
+          return await WebDavRestore().preview(await _downloadBackup());
+        } finally {
+          await SmartDialog.dismiss();
+        }
+      })();
+      final changes = await Get.dialog<List<RestoreChange>>(
+        _WebDavPreviewDialog(preview: preview),
       );
-      final result = await restoreArchive(archive);
-      if (result.failed.isNotEmpty) {
-        SmartDialog.showToast(
-          '${result.succeeded.isEmpty ? "恢复失败" : "部分恢复成功"}：'
-          '${result.failed.join("、")}，请重试',
-        );
-      } else if (result.succeeded.isEmpty) {
-        SmartDialog.showToast('备份中没有已选择的可恢复数据');
-      } else {
+      if (changes == null) return;
+      final result = await WebDavRestore().apply(changes);
+      if (result.failed.isEmpty &&
+          result.skipped.isEmpty &&
+          result.succeeded.isNotEmpty) {
         final time = DateTime.now();
         await LocalStorageService.instance.setValue(
           LocalStorageService.kWebDAVLastRecoverTime,
           time.millisecondsSinceEpoch,
         );
         lastRecoverTime.value = Utils.parseTime(time);
-        SmartDialog.showToast('同步完成');
       }
+      await _showResult('恢复结果', result);
     } catch (_, stack) {
       Log.e('WebDAV 恢复失败', stack);
       SmartDialog.showToast('恢复失败，请检查备份和连接后重试');
     } finally {
       _busy = false;
-      await SmartDialog.dismiss();
     }
   }
 
   Future<WebDavRestoreResult> restoreArchive(Archive archive) async {
-    final selected = <String>{
-      if (isSyncFollows.value) _userFollowJsonName,
-      if (isSyncFollows.value) _userTagsJsonName,
-      if (isSyncHistories.value) _userHistoriesJsonName,
-      if (isSyncBlockWord.value) _userBlockedWordJsonName,
-      if (isSyncBilibiliAccount.value) _userBilibiliAccountJsonName,
-      _userSettingsJsonName,
-    };
-    final documents = <String, dynamic>{};
-    var totalSize = 0;
-    for (final file in archive) {
-      if (!file.isFile || !selected.contains(file.name)) continue;
-      totalSize += file.size;
-      if (totalSize > 32 * 1024 * 1024 || documents.containsKey(file.name)) {
-        throw const FormatException('Invalid backup contents');
+    final restore = WebDavRestore();
+    final preview = await restore.preview(WebDavBackup.read(archive));
+    return restore.apply([
+      for (final group in RestoreGroup.values)
+        if (preview.backup.has(group)) preview.change(group, RestoreMode.merge),
+    ]);
+  }
+
+  Future<void> rollback() async {
+    if (_busy) return;
+    _busy = true;
+    try {
+      final restore = WebDavRestore();
+      if (!await restore.hasRollback()) {
+        SmartDialog.showToast('没有可用的本地回滚点');
+        return;
       }
-      final document = jsonDecode(utf8.decode(file.content as List<int>));
-      if (document is! Map ||
-          (document['version'] != null && document['version'] != 2) ||
-          !document.containsKey('data')) {
-        throw const FormatException('Unsupported backup document');
+      if (await Utils.showAlertDialog(
+        '还原最近一次恢复前的数据。已在恢复后修改的类别会保留。',
+        title: '回滚 WebDAV 恢复',
+      )) {
+        await _showResult('回滚结果', await restore.rollback());
       }
-      documents[file.name] = document['data'];
+    } catch (_, stack) {
+      Log.e('WebDAV 回滚失败', stack);
+      SmartDialog.showToast('回滚失败，请稍后重试');
+    } finally {
+      _busy = false;
     }
-    // Validate every selected document before the first persistent mutation.
-    final follows = documents[_userFollowJsonName] as List?;
-    final tags = documents[_userTagsJsonName] as List?;
-    DBService.validateSnapshot(follows: follows, tags: tags);
-    final histories = documents.containsKey(_userHistoriesJsonName)
-        ? DBService.parseHistories(
-            documents[_userHistoriesJsonName] as List,
-          ).values.toList()
-        : null;
-    final words = documents.containsKey(_userBlockedWordJsonName)
-        ? validateShieldRules(documents[_userBlockedWordJsonName] as List)
-        : null;
-    final settings = documents.containsKey(_userSettingsJsonName)
-        ? LocalStorageService.validateSettings(
-            documents[_userSettingsJsonName] as Map,
-          )
-        : null;
-    final account = documents[_userBilibiliAccountJsonName] as Map?;
-    final cookie = account == null ? null : account['cookie'] as String;
-    final result = WebDavRestoreResult();
-    Future<void> restore(String name, Future<void> Function() write) async {
-      try {
-        await write();
-        result.succeeded.add(name);
-      } catch (_, stack) {
-        result.failed.add(name);
-        Log.e('恢复$name失败', stack);
+  }
+
+  Future<void> importLegacyAccount() async {
+    if (_busy) return;
+    _busy = true;
+    try {
+      if (!await Utils.showAlertDialog(
+        '将验证旧备份内的哔哩哔哩会话。会话有效时会替换当前账号，账号不能通过数据回滚还原。',
+        title: '导入旧备份账号',
+      ))
+        return;
+      final cookie = (await _downloadBackup(accountOnly: true)).legacyCookie;
+      if (cookie == null) {
+        SmartDialog.showToast('备份中没有可导入的账号');
+        return;
       }
+      final imported = await BiliBiliAccountService.instance
+          .importVerifiedCookie(cookie);
+      SmartDialog.showToast(imported ? '已导入哔哩哔哩账号' : '会话验证失败，已保留当前账号');
+    } catch (_, stack) {
+      Log.e('旧备份账号导入失败', stack);
+      SmartDialog.showToast('账号导入失败');
+    } finally {
+      _busy = false;
     }
-
-    if (follows != null || tags != null) {
-      await restore('关注和标签', () async {
-        await DBService.instance.importSnapshot(
-          follows: follows,
-          tags: tags,
-          replace: true,
-        );
-        EventBus.instance.emit(Constant.kUpdateFollow, 0);
-      });
-    }
-    if (histories != null) {
-      await restore('观看历史', () async {
-        await DBService.instance.importHistories(
-          histories.map((item) => item.toJson()),
-          replace: false,
-        );
-        EventBus.instance.emit(Constant.kUpdateHistory, 0);
-      });
-    }
-    if (words != null) {
-      await restore('屏蔽词', () async {
-        await AppSettingsController.instance.importShieldRules(
-          words,
-          replace: false,
-        );
-      });
-    }
-    if (settings != null) {
-      await restore('设置', () async {
-        await LocalStorageService.instance.restoreSettings(settings);
-        AppSettingsController.instance.reloadSettings();
-      });
-    }
-    if (cookie != null) {
-      await restore('旧备份账号', () async {
-        await BiliBiliAccountService.instance.setCookie(cookie);
-        await BiliBiliAccountService.instance.loadUserInfo();
-      });
-    }
-    return result;
   }
 
-  // ui控制--密码可见控制
-  void changePasswordVisible() {
-    passwordVisible.value = !passwordVisible.value;
-  }
+  Future<void> _showResult(String title, WebDavRestoreResult result) =>
+      Get.dialog<void>(
+        AlertDialog(
+          title: Text(title),
+          content: SingleChildScrollView(
+            child: Text(
+              [
+                for (final name in result.succeeded) '$name · 已完成',
+                for (final name in result.unchanged) '$name · 无需更改',
+                for (final name in result.skipped) '$name · 本地已有新改动，已跳过',
+                for (final name in result.failed) '$name · 失败',
+                if (result.succeeded.isEmpty &&
+                    result.unchanged.isEmpty &&
+                    result.skipped.isEmpty &&
+                    result.failed.isEmpty)
+                  '没有选中的可恢复数据',
+              ].join('\n'),
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Get.back(), child: const Text('关闭')),
+          ],
+        ),
+      );
 
-  void changeIsSyncFollows() {
-    isSyncFollows.value = !isSyncFollows.value;
-  }
-
-  void changeIsSyncHistories() {
-    isSyncHistories.value = !isSyncHistories.value;
-  }
-
-  void changeIsSyncBlockWord() {
-    isSyncBlockWord.value = !isSyncBlockWord.value;
-  }
-
-  void changeIsSyncBilibiliAccount() {
-    isSyncBilibiliAccount.value = !isSyncBilibiliAccount.value;
-  }
+  void changePasswordVisible() => passwordVisible.toggle();
 }
 
-class WebDavRestoreResult {
-  final List<String> succeeded = [];
-  final List<String> failed = [];
+class _WebDavPreviewDialog extends StatefulWidget {
+  const _WebDavPreviewDialog({required this.preview});
+  final WebDavRestorePreview preview;
+
+  @override
+  State<_WebDavPreviewDialog> createState() => _WebDavPreviewDialogState();
+}
+
+class _WebDavPreviewDialogState extends State<_WebDavPreviewDialog> {
+  final modes = {
+    for (final group in RestoreGroup.values) group: RestoreMode.merge,
+  };
+  bool restoreBells = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final changes = <RestoreChange>[];
+    final rows = <Widget>[];
+    var invalid = false;
+    for (final group in RestoreGroup.values) {
+      final present = widget.preview.backup.has(group);
+      final mode = modes[group]!;
+      final details = <String>[];
+      if (!present) {
+        details.add('备份中缺少此类别');
+      } else if (mode != RestoreMode.skip) {
+        try {
+          final change = widget.preview.change(
+            group,
+            mode,
+            restoreBells: restoreBells,
+          );
+          changes.add(change);
+          for (final entry in change.differences.entries) {
+            details.add('${entry.key} · ${entry.value.label}');
+          }
+          if (mode == RestoreMode.replace) details.add('将移除预览所列的本机数据');
+        } on FormatException catch (error) {
+          invalid = true;
+          details.add(error.message);
+        }
+      } else {
+        details.add('保留本机数据');
+      }
+      rows.add(
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          title: Text(group.label),
+          subtitle: Text(details.join('\n')),
+          trailing: present
+              ? DropdownButton<RestoreMode>(
+                  value: mode,
+                  onChanged: (value) => setState(() => modes[group] = value!),
+                  items: [
+                    for (final mode in RestoreMode.values)
+                      DropdownMenuItem(value: mode, child: Text(mode.label)),
+                  ],
+                )
+              : null,
+        ),
+      );
+    }
+    return AlertDialog(
+      title: const Text('WebDAV 恢复预览'),
+      content: SingleChildScrollView(
+        child: SizedBox(
+          width: 480,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ...rows,
+              if (widget.preview.backup.has(RestoreGroup.follows))
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('应用备份中的开播提醒选择'),
+                  value: restoreBells,
+                  onChanged: modes[RestoreGroup.follows] == RestoreMode.skip
+                      ? null
+                      : (value) => setState(() => restoreBells = value!),
+                ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Get.back(), child: const Text('取消')),
+        FilledButton(
+          onPressed: invalid || changes.isEmpty
+              ? null
+              : () => Get.back(result: changes),
+          child: const Text('确认恢复'),
+        ),
+      ],
+    );
+  }
 }

@@ -422,6 +422,7 @@ class DouyinSite extends LiveSite {
       "https://live.douyin.com/$webRid",
       header: headers,
     );
+    _checkRateLimit(headResp.statusCode, headResp.headers.value('retry-after'));
     var dyCookie = "";
     headResp.headers["set-cookie"]?.forEach((element) {
       var cookie = element.split(";")[0];
@@ -436,6 +437,13 @@ class DouyinSite extends LiveSite {
       }
     });
     return dyCookie;
+  }
+
+  void _checkRateLimit(int? status, String? retryAfter) {
+    if (status == 429) {
+      throw CoreError('平台限流', statusCode: 429, kind: CoreErrorKind.rateLimited,
+        retryAfter: CoreError.parseRetryAfter(retryAfter));
+    }
   }
 
   /// 通过webRid获取直播间Web信息
@@ -684,6 +692,7 @@ class DouyinSite extends LiveSite {
       'https://live.douyin.com',
       header: headers,
     );
+    _checkRateLimit(headResp.statusCode, headResp.headers.value('retry-after'));
     var dyCookie = "";
     headResp.headers["set-cookie"]?.forEach((element) {
       var cookie = element.split(";")[0];
@@ -728,6 +737,7 @@ class DouyinSite extends LiveSite {
         cover: itemData["cover"]["url_list"][0].toString(),
         userName: itemData["owner"]["nickname"].toString(),
         online: int.tryParse(itemData["stats"]["total_user"].toString()) ?? 0,
+        liveStatus: itemData['status'] is int ? itemData['status'] == 2 : null,
       );
       items.add(roomItem);
     }
@@ -760,12 +770,22 @@ class DouyinSite extends LiveSite {
     try {
       final data = await _getRoomDataByApi(webRid);
       return LiveRoomStatus(
-          live: LiveStatusParser.douyinStatusCode(data['data'][0]) == 2);
-    } catch (_) {
+        live: LiveStatusParser.douyinStatusCode(data['data'][0]) == 2,
+      );
+    } catch (error) {
+      RequestContext.current?.check();
+      if (error is CoreError &&
+          (error.kind == CoreErrorKind.rateLimited ||
+              error.kind == CoreErrorKind.authRequired))
+        rethrow;
       final data = await _getRoomDataByHtml(webRid);
       return LiveRoomStatus(
-          live: LiveStatusParser.douyinStatusCode(
-                  data['roomStore']['roomInfo']['room']) == 2);
+        live:
+            LiveStatusParser.douyinStatusCode(
+              data['roomStore']['roomInfo']['room'],
+            ) ==
+            2,
+      );
     }
   }
 

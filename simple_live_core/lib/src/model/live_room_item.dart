@@ -15,12 +15,14 @@ class LiveRoomItem {
 
   /// 人气/在线人数
   final int online;
+  final bool? liveStatus;
   LiveRoomItem({
     required this.roomId,
     required this.title,
     required this.cover,
     required this.userName,
     this.online = 0,
+    this.liveStatus,
   });
 
   @override

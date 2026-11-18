@@ -18,6 +18,9 @@ class LiveSite {
   int _statusConfigurationVersion = 0;
   int get statusConfigurationVersion => _statusConfigurationVersion;
 
+  LiveRoomStatus? peekRoomStatus(String roomId) =>
+      _statusCache.peek(roomId, _statusConfigurationVersion);
+
   /// Call when credentials or other status-query configuration changes.
   void invalidateStatusCache() {
     _statusConfigurationVersion++;

@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
@@ -24,6 +25,8 @@ class FollowService extends GetxService with WidgetsBindingObserver {
 
   final DateTime Function() _now;
   StreamSubscription<dynamic>? subscription;
+  StreamSubscription<List<ConnectivityResult>>? _connection;
+  bool _wasOffline = false;
   static FollowService get instance => Get.find<FollowService>();
 
   final StreamController _updatedListController = StreamController.broadcast();
@@ -52,6 +55,7 @@ class FollowService extends GetxService with WidgetsBindingObserver {
 
   Timer? updateTimer;
   final _refreshQueue = StatusRefreshQueue();
+  late final _recovery = PlatformRecovery(now: _now);
   Future<void>? _refreshFuture;
   Completer<void>? _refreshDone;
   final _refreshSeen = HashSet<FollowUser>.identity();
@@ -92,6 +96,20 @@ class FollowService extends GetxService with WidgetsBindingObserver {
         _refreshQueue.concurrency = getOptimalConcurrency();
       },
     );
+    _connection = Connectivity().onConnectivityChanged.listen((results) {
+      final offline = results.every(
+        (result) => result == ConnectivityResult.none,
+      );
+      if (_wasOffline && !offline) {
+        _recovery.networkRestored();
+        if (_foreground && followList.isNotEmpty) {
+          unawaited(
+            startUpdateStatus(automatic: true).catchError((Object _) {}),
+          );
+        }
+      }
+      _wasOffline = offline;
+    }, onError: (Object _) {});
     initTimer();
     super.onInit();
   }
@@ -369,18 +387,26 @@ class FollowService extends GetxService with WidgetsBindingObserver {
         identical(DBService.instance.followBox.get(item.id), item);
     if (!current()) return;
     try {
-      final status = await site.getRoomStatusCached(
-        roomId: item.roomId,
-        automatic: automatic,
-      );
+      final cached = automatic ? site.peekRoomStatus(item.roomId) : null;
+      final status =
+          cached ??
+          await _recovery.run<LiveRoomStatus>(
+            item.siteId,
+            version,
+            () =>
+                site.getRoomStatusCached(roomId: item.roomId, automatic: false),
+          );
       if (!current()) return;
       item.liveStatus.value = status.live ? 2 : 1;
+      if (cached == null || item.lastStatusCheck == null)
+        item.lastStatusCheck = _now();
+      item.statusIssue.value = null;
       item.liveStartTime = status.live ? status.showTime : null;
-    } catch (e) {
-      Log.logPrint(e);
+    } catch (error) {
       if (!current()) return;
-      item.liveStatus.value = 0;
-      item.liveStartTime = null;
+      final kind = PlatformRecovery.classify(error);
+      item.statusIssue.value = kind.name;
+      Log.platformFailure(kind);
     }
   }
 
@@ -557,6 +583,7 @@ class FollowService extends GetxService with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     updateTimer?.cancel();
     subscription?.cancel();
+    _connection?.cancel();
     _updatedListController.close();
     super.onClose();
   }

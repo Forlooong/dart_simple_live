@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'package:remixicon/remixicon.dart';
 import 'package:simple_live_app/app/app_style.dart';
-import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/modules/sync/remote_sync/webdav/remote_sync_webdav_controller.dart';
 import 'package:simple_live_app/routes/route_path.dart';
 import 'package:simple_live_app/widgets/settings/settings_card.dart';
@@ -25,7 +23,7 @@ class RemoteSyncWebDAVPage extends GetView<RemoteSyncWebDAVController> {
                         ListTile(
                           title: const Text("点击登录"),
                           leading: const Icon(Icons.login),
-                          subtitle: const Text("登录后可以同步您的所有数据"),
+                          subtitle: const Text("同步关注、标签、观看历史、屏蔽词和设置"),
                           trailing: const Icon(Icons.chevron_right),
                           onTap: () {
                             Get.toNamed(RoutePath.kRemoteSyncWebDavConfig);
@@ -57,79 +55,29 @@ class RemoteSyncWebDAVPage extends GetView<RemoteSyncWebDAVController> {
                           title: const Text("恢复到本地"),
                           subtitle: Text("上次恢复：${controller.lastRecoverTime}"),
                           leading: const Icon(Icons.cloud_download_outlined),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                icon: const Icon(Icons.settings),
-                                onPressed: showSetting,
-                              ),
-                              const Icon(Icons.chevron_right),
-                            ],
-                          ),
-                          onTap: () {
-                            controller.doWebDAVRecovery();
-                          },
-                          onLongPress: showSetting,
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: controller.doWebDAVRecovery,
+                        ),
+                        AppStyle.divider,
+                        ListTile(
+                          title: const Text('导入旧备份账号'),
+                          leading: const Icon(Icons.person_outline),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: controller.importLegacyAccount,
                         ),
                       ],
               ),
             ),
           ),
-        ],
-      ),
-    );
-  }
-
-  void showSetting() {
-    Utils.showBottomSheet(
-      title: '同步选项',
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          AppStyle.divider,
-          Obx(
-            () => CheckboxListTile(
-              secondary: const Icon(Remix.heart_line),
-              title: const Text("同步关注列表"),
-              value: controller.isSyncFollows.value,
-              controlAffinity: ListTileControlAffinity.trailing,
-              onChanged: (value) => controller.changeIsSyncFollows(),
+          const SizedBox(height: 12),
+          SettingsCard(
+            child: ListTile(
+              title: const Text('回滚最近一次恢复'),
+              leading: const Icon(Icons.undo),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: controller.rollback,
             ),
           ),
-          AppStyle.divider,
-          Obx(
-            () => CheckboxListTile(
-              secondary: const Icon(Icons.history),
-              title: const Text("同步播放历史记录"),
-              value: controller.isSyncHistories.value,
-              controlAffinity: ListTileControlAffinity.trailing,
-              onChanged: (value) => controller.changeIsSyncHistories(),
-            ),
-          ),
-          AppStyle.divider,
-          Obx(
-            () => CheckboxListTile(
-              secondary: const Icon(Remix.shield_keyhole_line),
-              title: const Text("同步屏蔽字"),
-              value: controller.isSyncBlockWord.value,
-              controlAffinity: ListTileControlAffinity.trailing,
-              onChanged: (value) => controller.changeIsSyncBlockWord(),
-            ),
-          ),
-          AppStyle.divider,
-          Obx(
-            () => CheckboxListTile(
-              secondary: const Icon(Remix.account_circle_line),
-              title: const Text("从旧备份恢复哔哩哔哩账号"),
-              subtitle: const Text("默认关闭；新备份不包含账号和 WebDAV 凭据"),
-              value: controller.isSyncBilibiliAccount.value,
-              controlAffinity: ListTileControlAffinity.trailing,
-              onChanged: (value) => controller.changeIsSyncBilibiliAccount(),
-            ),
-          ),
-          AppStyle.divider,
         ],
       ),
     );

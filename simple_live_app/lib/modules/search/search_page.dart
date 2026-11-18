@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/app_style.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/modules/search/search_controller.dart';
+import 'package:simple_live_app/modules/search/aggregate_search_view.dart';
 import 'package:simple_live_app/modules/search/search_list_view.dart';
 
 class SearchPage extends GetView<AppSearchController> {
@@ -10,97 +12,90 @@ class SearchPage extends GetView<AppSearchController> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        title: TextField(
-          controller: controller.searchController,
-          autofocus: true,
-          decoration: InputDecoration(
-            hintText: "搜点什么吧",
-            border: OutlineInputBorder(
-              borderRadius: AppStyle.radius24,
-            ),
-            contentPadding: AppStyle.edgeInsetsH12,
-            prefixIcon: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  onPressed: Get.back,
-                  icon: const Icon(Icons.arrow_back),
-                ),
-                Obx(
-                  () => DropdownButton<int>(
-                    underline: const SizedBox(),
-                    items: const [
-                      DropdownMenuItem(
-                        value: 0,
-                        child: Text("房间"),
-                      ),
-                      DropdownMenuItem(
-                        value: 1,
-                        child: Text("主播"),
-                      ),
-                    ],
-                    value: controller.searchMode.value,
-                    onChanged: (e) {
-                      controller.searchMode.value = e ?? 0;
-                      controller.doSearch();
-                    },
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape): () =>
+            Navigator.of(context).maybePop(),
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          automaticallyImplyLeading: false,
+          title: TextField(
+            controller: controller.searchController,
+            autofocus: true,
+            decoration: InputDecoration(
+              hintText: "输入主播或直播间关键词",
+              border: OutlineInputBorder(borderRadius: AppStyle.radius24),
+              contentPadding: AppStyle.edgeInsetsH12,
+              prefixIcon: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: "返回",
+                    onPressed: Get.back,
+                    icon: const Icon(Icons.arrow_back),
                   ),
-                ),
-                AppStyle.hGap8,
-              ],
+                  Obx(
+                    () => DropdownButton<int>(
+                      underline: const SizedBox(),
+                      items: const [
+                        DropdownMenuItem(value: 0, child: Text("房间")),
+                        DropdownMenuItem(value: 1, child: Text("主播")),
+                      ],
+                      value: controller.searchMode.value,
+                      onChanged: (e) {
+                        controller.searchMode.value = e ?? 0;
+                        controller.doSearch();
+                      },
+                    ),
+                  ),
+                  AppStyle.hGap8,
+                ],
+              ),
+              suffixIcon: IconButton(
+                tooltip: "搜索",
+                onPressed: controller.doSearch,
+                icon: const Icon(Icons.search),
+              ),
             ),
-            suffixIcon: IconButton(
-              onPressed: controller.doSearch,
-              icon: const Icon(Icons.search),
-            ),
+            onSubmitted: (e) {
+              controller.doSearch();
+            },
           ),
-          onSubmitted: (e) {
-            controller.doSearch();
-          },
-        ),
-        bottom: TabBar(
-          controller: controller.tabController,
-          padding: EdgeInsets.zero,
-          tabAlignment: TabAlignment.center,
-          tabs: Sites.supportSites
-              .map(
-                (e) => Tab(
-                  //text: e.name,
+          bottom: TabBar(
+            controller: controller.tabController,
+            padding: EdgeInsets.zero,
+            tabAlignment: TabAlignment.center,
+            tabs: [
+              for (final site in Sites.supportSites)
+                Tab(
                   child: Row(
                     children: [
                       Image.asset(
-                        e.logo,
+                        site.logo,
                         width: 24,
+                        excludeFromSemantics: true,
                       ),
                       AppStyle.hGap8,
-                      Text(e.name),
+                      Text(site.name),
                     ],
                   ),
                 ),
-              )
-              .toList(),
-          labelPadding: AppStyle.edgeInsetsH20,
-          isScrollable: true,
-          indicatorSize: TabBarIndicatorSize.label,
+              const Tab(text: '全部平台'),
+            ],
+            labelPadding: AppStyle.edgeInsetsH20,
+            isScrollable: true,
+            indicatorSize: TabBarIndicatorSize.label,
+          ),
         ),
-      ),
-      body: TabBarView(
-        physics: const NeverScrollableScrollPhysics(),
-        controller: controller.tabController,
-        children: Sites.supportSites
-            .map((e) => SearchListView(
-                      e.id,
-                    )
-                // (e) => e.id == Constant.kDouyin
-                //     ? const DouyinSearchView()
-                //     : SearchListView(
-                //         e.id,
-                //       ),
-                )
-            .toList(),
+        body: TabBarView(
+          physics: const NeverScrollableScrollPhysics(),
+          controller: controller.tabController,
+          children: [
+            for (final site in Sites.supportSites) SearchListView(site.id),
+            AggregateSearchView(controller.aggregate),
+          ],
+        ),
       ),
     );
   }
