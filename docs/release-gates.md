@@ -85,3 +85,20 @@ migration certification. Missing gates remain visible as blockers.
 The PR workflow runs deterministic regression suites for core, the main app and
 TV using the release Flutter version. Record the results and each manual matrix
 entry against the same commit used to build the candidate.
+
+## Local checks for the 1.12.24 / 1.7.15 candidate
+
+The candidate uses the regular Android signing baselines and the next build
+numbers, `1.12.24+11125` and `1.7.15+10620`.
+
+| Local check | Result |
+| --- | --- |
+| Source versions, build numbers and version history | Passed |
+| Python packaging, version, signing and publisher fixtures | 84 passed |
+| Main and TV Dart and widget tests with native build hooks isolated | 215 main and 25 TV passed |
+| Selected Dart core transport, status, synchronization and update tests | 32 passed |
+
+The signed Android packages, packaged native runtimes and installed-device
+matrix require evidence from the six-platform build and the corresponding
+devices. The Windows test host could not create Flutter plugin symlinks and
+the widget checks did not build native libraries.
