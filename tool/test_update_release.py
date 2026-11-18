@@ -1,12 +1,22 @@
 """Offline checks for the manual unified-release trust boundary."""
 import copy
+import base64
 import unittest
 from pathlib import Path
 import tempfile
-from prepare_update_release import JOBS, TARGETS, validate_run, verify_uploaded, sha, minimum_sdk
+from prepare_update_release import JOBS, TARGETS, validate_run, verify_uploaded, sha, minimum_sdk, release_body
 
 
 class UpdateReleaseTest(unittest.TestCase):
+    def test_release_body_embeds_exact_manifest_bytes(self):
+        data = '{"notes":"更新详情"}\n'.encode('utf-8')
+        notes, blank, marker, encoded, end = release_body('版本说明', data).splitlines()
+        self.assertEqual(notes, '版本说明')
+        self.assertEqual(blank, '')
+        self.assertEqual(marker, '<!-- simple-live-update-manifest:v1')
+        self.assertEqual(base64.b64decode(encoded), data)
+        self.assertEqual(end, '-->')
+
     def test_build_tools_minimum_sdk_spacing(self):
         for row in ("sdkVersion:'24'", "sdkVersion: '24'", "  sdkVersion: '24'\r\n", "minSdkVersion:'24'"):
             self.assertEqual(minimum_sdk(row), 24)

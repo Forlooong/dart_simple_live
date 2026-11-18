@@ -5,7 +5,6 @@ import android.content.pm.PackageManager
 import android.content.pm.PackageInfo
 import android.net.Uri
 import android.os.Build
-import android.os.Process
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
@@ -39,16 +38,8 @@ class MainActivity : FlutterActivity() {
                     val current = packageManager.getPackageInfo(packageName, flags)
                     when (call.method) {
                         "identity" -> {
-                            val abis = Build.SUPPORTED_ABIS.filter {
-                                it.contains("64") == Process.is64Bit()
-                            }
-                            val arch = when (abis.firstOrNull()) {
-                                "arm64-v8a" -> "arm64"
-                                "armeabi-v7a" -> "arm32"
-                                "x86_64" -> "x64"
-                                else -> "unsupported"
-                            }
-                            result.success(mapOf("arch" to arch, "sdk" to Build.VERSION.SDK_INT,
+                            result.success(mapOf("sdk" to Build.VERSION.SDK_INT,
+                                "cachePath" to cacheDir.canonicalPath,
                                 "certificate" to certificate(current)))
                         }
                         "install" -> {

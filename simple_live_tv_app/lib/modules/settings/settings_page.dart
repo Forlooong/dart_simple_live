@@ -483,7 +483,7 @@ class SettingsPage extends GetView<SettingsController> {
       children: [
         HighlightListTile(
           focusNode: controller.versionFocusNode,
-          title: "版本",
+          title: "软件更新",
           subtitle: "v${Utils.packageInfo.version}",
           onTap: () => AppUpdateService.check(),
         ),

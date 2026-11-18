@@ -1,114 +1,256 @@
 import 'dart:ffi';
 import 'dart:io';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:simple_live_core/simple_live_core.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:simple_live_tv_app/services/local_storage_service.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class AppUpdateService {
   static const _channel = MethodChannel('simple_live/update');
   static bool _busy = false;
 
+  static bool _mayPrompt() =>
+      Get.isDialogOpen != true && !Get.currentRoute.contains('/room/');
+
   static Future<void> check({bool automatic = false}) async {
-    if (_busy) return;
+    if (_busy) {
+      if (!automatic) Get.rawSnackbar(message: '正在检查或处理更新');
+      return;
+    }
     final storage = LocalStorageService.instance;
     final now = DateTime.now().millisecondsSinceEpoch;
-    if (automatic && now - storage.getValue<int>('UpdateLastCheck', 0) <
-        const Duration(days: 1).inMilliseconds) return;
-    // Defer startup prompts while another dialog or a room is active.
-    if (automatic && (Get.isDialogOpen == true ||
-        Get.currentRoute.contains('/room/'))) return;
+    if (automatic &&
+        (!_mayPrompt() ||
+            now - storage.getValue<int>('UpdateLastCheck', 0) <
+                const Duration(days: 1).inMilliseconds)) {
+      return;
+    }
     _busy = true;
-    var userRequestedInstall = false;
+    final client = AppUpdateClient();
+    var releaseUri = updateReleaseUri(null);
+    var installing = false;
     try {
-      if (automatic) await storage.setValue('UpdateLastCheck', now);
       final info = await PackageInfo.fromPlatform();
-      final current = int.parse(info.buildNumber);
-      final update = await AppUpdateClient().check('tv');
+      final update = await client.check('tv');
+      await storage.setValue('UpdateLastCheck', now);
       if (update == null) {
-        if (!automatic) await _message('当前尚未发布更新');
+        if (!automatic) await _message('当前尚未发布更新', releaseUri);
         return;
       }
-      Map<String, dynamic> identity = {};
-      String arch;
-      if (Platform.isAndroid) {
-        identity = Map<String, dynamic>.from(
-            (await _channel.invokeMapMethod<String, dynamic>('identity'))!);
-        arch = identity['arch'] as String;
-      } else {
-        final abi = Abi.current().toString().toLowerCase();
-        arch = abi.contains('arm64') ? 'arm64' :
-            abi.contains('x64') ? 'x64' : 'unsupported';
-      }
+      releaseUri = update.releaseUri;
       final platform = Platform.operatingSystem;
-      final candidates = update.packages.where((p) =>
-          p.platform == platform && (p.arch == arch || p.arch == 'universal') &&
-          p.build > current).toList();
-      if (candidates.isEmpty) {
-        if (!automatic) await _message(update.packages.any((p) =>
-            p.platform == platform && (p.arch == arch || p.arch == 'universal'))
-            ? '已是最新版本' : '没有适合当前平台或架构的更新包');
-        return;
-      }
-      final package = update.select(platform: platform, arch: arch,
-          installedBuild: current, packageId: info.packageName,
-          certificate: identity['certificate'] as String? ?? '',
-          sdk: identity['sdk'] as int? ?? 0);
-      if (package == null) {
-        if (!automatic) await _message('发现新版，但没有与当前架构、系统或签名兼容的安装包。请查看发布说明。');
-        return;
-      }
-      if (automatic && storage.getValue<int>('UpdateIgnoredBuild', 0) == package.build) return;
-      final action = await Get.dialog<String>(AlertDialog(
-        title: Text('发现新版本 v' + update.version),
-        content: SingleChildScrollView(child: Text(update.notes +
-            (Platform.isIOS ? '\n\n当前 IPA 未签名，请通过已授权的分发渠道安装。' :
-            '\n\n安装包：' + (package.size / 1048576).toStringAsFixed(1) + ' MB'))),
-        actions: [
-          TextButton(onPressed: () => Get.back(result: 'ignore'), child: const Text('忽略此版本')),
-          TextButton(onPressed: () => Get.back(), child: const Text('稍后')),
-          TextButton(autofocus: true, onPressed: () => Get.back(result: 'install'),
-              child: Text(Platform.isIOS ? '查看分发页' : '立即更新')),
-        ],
-      ));
-      if (action == 'ignore') {
-        await storage.setValue('UpdateIgnoredBuild', package.build);
-      } else if (action == 'install') {
-        userRequestedInstall = true;
-        if (Platform.isIOS) {
-          await launchUrl(Uri.parse(updateReleasePage), mode: LaunchMode.externalApplication);
-        } else {
-          await _download(package, info.packageName);
+      final current = installedUpdateBuild(
+        info.buildNumber,
+        platform: platform,
+      );
+      final arch = switch (Abi.current()) {
+        Abi.androidArm => 'arm32',
+        Abi.androidArm64 ||
+        Abi.iosArm64 ||
+        Abi.macosArm64 ||
+        Abi.linuxArm64 ||
+        Abi.windowsArm64 => 'arm64',
+        Abi.androidX64 ||
+        Abi.macosX64 ||
+        Abi.linuxX64 ||
+        Abi.windowsX64 => 'x64',
+        _ => 'unsupported',
+      };
+      final matches = update.packages.where(
+        (p) =>
+            p.platform == platform && (p.arch == arch || p.arch == 'universal'),
+      );
+      UpdatePackage? package;
+      String? cachePath;
+      String status;
+      if (matches.isEmpty) {
+        status = '此发布没有适用于当前平台或架构的安装包';
+      } else if (current == null) {
+        status = '无法识别本机版本号，请通过发布页选择安装包';
+      } else if (!matches.any((p) => p.build > current)) {
+        status = '当前版本无需更新';
+      } else {
+        Map<String, dynamic> identity = const {};
+        if (Platform.isAndroid) {
+          try {
+            identity =
+                await _channel.invokeMapMethod<String, dynamic>('identity') ??
+                const {};
+          } on PlatformException {
+            // Details remain available if Android cannot read the signature.
+          } on MissingPluginException {
+            // Older or unsupported hosts can still open the release page.
+          }
+          cachePath = identity['cachePath'] as String?;
         }
+        package = update.select(
+          platform: platform,
+          arch: arch,
+          installedBuild: current,
+          packageId: info.packageName,
+          certificate: identity['certificate'] as String? ?? '',
+          sdk: identity['sdk'] as int? ?? 0,
+        );
+        status = switch (package) {
+          null
+              when Platform.isAndroid && !identity.containsKey('certificate') =>
+            '无法读取本机安装签名，请查看发布页',
+          null => '有新版，安装包与本机签名或系统版本不兼容',
+          _ when Platform.isIOS => '发现新版，IPA 需要签名后安装',
+          _ => '可以更新',
+        };
       }
-    } catch (_) {
-      if (!automatic || userRequestedInstall) await _message('检查或安装更新失败，请检查网络后重试，或前往本分支发布页。');
+
+      if (automatic &&
+          (package == null ||
+              !_mayPrompt() ||
+              storage.getValue<int>('UpdateIgnoredBuild', 0) ==
+                  package.build)) {
+        return;
+      }
+      final selected = package;
+      final action = await Get.dialog<String>(
+        AlertDialog(
+          title: const Text('更新详情'),
+          scrollable: true,
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: Text(
+              [
+                '当前版本  v${info.version}（${info.buildNumber}）',
+                '发布版本  v${update.version}',
+                if (update.publishedAt case final published?)
+                  '发布时间  ${published.toLocal().toString().substring(0, 16)}',
+                status,
+                if (selected != null)
+                  '安装包  ${selected.arch} · ${(selected.size / 1048576).toStringAsFixed(1)} MB',
+                '',
+                update.notes.trim().isEmpty ? '此版本暂无更新说明' : update.notes,
+              ].join('\n'),
+            ),
+          ),
+          actions: [
+            if (selected != null)
+              TextButton(
+                onPressed: () => Get.back(result: 'ignore'),
+                child: const Text('忽略此版本'),
+              ),
+            TextButton(
+              onPressed: () => Get.back(result: 'release'),
+              child: const Text('发布页'),
+            ),
+            TextButton(
+              autofocus: selected == null,
+              onPressed: () => Get.back(),
+              child: Text(selected == null ? '关闭' : '稍后'),
+            ),
+            if (selected != null && !Platform.isIOS)
+              FilledButton(
+                autofocus: true,
+                onPressed: () => Get.back(result: 'install'),
+                child: const Text('下载并安装'),
+              ),
+          ],
+        ),
+      );
+      if (action == 'release') {
+        await _openRelease(releaseUri);
+      } else if (action == 'ignore' && selected != null) {
+        await storage.setValue('UpdateIgnoredBuild', selected.build);
+      } else if (action == 'install' && selected != null) {
+        installing = true;
+        final root = cachePath ?? Directory.systemTemp.path;
+        await _download(
+          client,
+          selected,
+          Directory('$root/simple-live-updates-${info.packageName}'),
+          releaseUri,
+        );
+      }
+    } catch (error) {
+      if (!automatic || installing) {
+        await _message(
+          _errorText(error, installing ? '安装更新' : '检查更新'),
+          releaseUri,
+        );
+      }
     } finally {
+      client.dio.close(force: true);
       _busy = false;
     }
   }
 
-  static Future<void> _download(UpdatePackage package, String id) async {
+  static String _errorText(Object error, String action) {
+    if (error is DioException) {
+      final code = error.response?.statusCode;
+      if (code == 429) {
+        return '$action暂时受 GitHub 限制，可稍后重试或打开发布页。';
+      }
+      if (code != null) return '$action失败，GitHub 返回 HTTP $code。';
+      return switch (error.type) {
+        DioExceptionType.connectionTimeout ||
+        DioExceptionType.sendTimeout ||
+        DioExceptionType.receiveTimeout => '$action超时，暂时无法访问 GitHub 或其下载服务。',
+        DioExceptionType.badCertificate => '$action失败，无法验证 GitHub 的网络证书。',
+        _ => '$action失败，暂时无法连接 GitHub 或其下载服务。',
+      };
+    }
+    if (error is FormatException) {
+      return action == '检查更新'
+          ? '更新清单格式或完整性校验失败。'
+          : '安装包大小或 SHA-256 校验失败，请重新下载。';
+    }
+    if (error is FileSystemException) {
+      return action == '检查更新' ? '读取本机更新设置失败。' : '无法保存或打开安装包，请检查存储空间和系统权限。';
+    }
+    return '$action失败，可从发布页选择适用的安装包。';
+  }
+
+  static Future<void> _download(
+    AppUpdateClient client,
+    UpdatePackage package,
+    Directory directory,
+    Uri releaseUri,
+  ) async {
     final cancel = CancelToken();
     final progress = ValueNotifier<double>(0);
-    final dialog = Get.dialog<void>(PopScope(canPop: false, child: AlertDialog(
-      title: const Text('正在下载更新'),
-      content: ValueListenableBuilder<double>(
-        valueListenable: progress,
-        builder: (_, value, __) => LinearProgressIndicator(value: value)),
-      actions: [TextButton(autofocus: true,
-          onPressed: () => cancel.cancel('用户取消'), child: const Text('取消'))],
-    )), barrierDismissible: false);
+    final dialog = Get.dialog<void>(
+      PopScope(
+        canPop: false,
+        child: AlertDialog(
+          title: const Text('正在下载更新'),
+          content: ValueListenableBuilder<double>(
+            valueListenable: progress,
+            builder: (_, value, __) => LinearProgressIndicator(
+              value: value,
+              semanticsLabel: '安装包下载进度',
+            ),
+          ),
+          actions: [
+            TextButton(
+              autofocus: true,
+              onPressed: () => cancel.cancel(),
+              child: const Text('取消'),
+            ),
+          ],
+        ),
+      ),
+      barrierDismissible: false,
+    );
     File? file;
     Object? failure;
     try {
-      file = await AppUpdateClient().download(package,
-          Directory(Directory.systemTemp.path + '/simple-live-updates-' + id),
-          cancel: cancel, progress: (received, total) => progress.value = received / total);
+      file = await client.download(
+        package,
+        directory,
+        cancel: cancel,
+        progress: (received, total) => progress.value = received / total,
+      );
     } catch (error) {
       failure = error;
     } finally {
@@ -116,45 +258,63 @@ class AppUpdateService {
       await dialog;
       progress.dispose();
     }
-    if (cancel.isCancelled) return;
-    if (failure != null || file == null) {
-      await _message('下载或完整性校验失败，请重试');
+    if (failure is DioException && CancelToken.isCancel(failure)) return;
+    if (failure != null) {
+      await _message(_errorText(failure, '下载安装包'), releaseUri);
       return;
     }
+    if (file == null || cancel.isCancelled) return;
     if (Platform.isAndroid) {
       final result = await _channel.invokeMethod<String>('install', {
-        'path': file.path, 'build': package.build,
+        'path': file.path,
+        'build': package.build,
         'certificate': package.certificate,
       });
       if (result == 'permission') {
-        await _message('请允许此应用安装更新，授权后再次点击检查更新。');
+        await _message('请允许此应用安装更新，授权后再次打开「软件更新」。', releaseUri);
       }
+    } else if (Platform.isWindows) {
+      await Process.start(file.path, [], mode: ProcessStartMode.detached);
+      await _message('安装器已打开，请按提示关闭应用并完成覆盖安装。', releaseUri);
     } else {
-      final command = Platform.isWindows ? file.path :
-          Platform.isMacOS ? 'open' : 'xdg-open';
-      final args = Platform.isWindows ? <String>[] : [file.path];
-      if (Platform.isWindows) {
-        await Process.start(command, args, mode: ProcessStartMode.detached);
-      } else {
-        final opened = await Process.run(command, args);
-        if (opened.exitCode != 0) {
-          await _message('系统未能打开安装包，请安装相应的文件处理程序，或前往发布页手动下载。');
-          return;
-        }
-      }
-      await _message(Platform.isWindows
-          ? '安装器已打开，请按提示关闭应用并完成覆盖安装。'
-          : '安装包已打开，请通过系统完成更新。');
+      final opened = await Process.run(Platform.isMacOS ? 'open' : 'xdg-open', [
+        file.path,
+      ]);
+      await _message(
+        opened.exitCode == 0 ? '安装包已打开，请通过系统完成更新。' : '系统无法打开安装包，可从发布页下载并手动安装。',
+        releaseUri,
+      );
     }
   }
 
-  static Future<void> _message(String text) async {
-    await Get.dialog<void>(AlertDialog(content: Text(text), actions: [
-      TextButton(autofocus: true, onPressed: () => Get.back(), child: const Text('确定')),
-      TextButton(onPressed: () {
-        launchUrl(Uri.parse(updateReleasePage), mode: LaunchMode.externalApplication);
-      }, child: const Text('发布页')),
-    ]));
+  static Future<void> _openRelease(Uri uri) async {
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      await _message('系统无法打开浏览器，请通过 GitHub 查看此版本。', uri, showRelease: false);
+    }
+  }
+
+  static Future<void> _message(
+    String text,
+    Uri uri, {
+    bool showRelease = true,
+  }) async {
+    final action = await Get.dialog<String>(
+      AlertDialog(
+        content: Text(text),
+        actions: [
+          TextButton(
+            autofocus: true,
+            onPressed: () => Get.back(),
+            child: const Text('确定'),
+          ),
+          if (showRelease)
+            TextButton(
+              onPressed: () => Get.back(result: 'release'),
+              child: const Text('发布页'),
+            ),
+        ],
+      ),
+    );
+    if (action == 'release') await _openRelease(uri);
   }
 }
-

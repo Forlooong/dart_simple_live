@@ -245,7 +245,8 @@ class MinePage extends StatelessWidget {
                 ),
                 ListTile(
                   leading: const Icon(Icons.system_update),
-                  title: const Text('检查更新'),
+                  title: const Text('软件更新'),
+                  subtitle: const Text('检查更新并查看版本说明'),
                   onTap: () => AppUpdateService.check(),
                 ),
                 ListTile(

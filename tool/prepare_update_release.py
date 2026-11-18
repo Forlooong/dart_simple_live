@@ -1,5 +1,6 @@
 """Prepare a manual, SHA-bound fork release from the unified installer workflow."""
 import argparse
+import base64
 import hashlib
 import json
 from pathlib import Path
@@ -22,6 +23,27 @@ TARGETS = [('main', 'Android', 'android', arch) for arch in ('arm32', 'arm64', '
 def sha(path):
     with path.open('rb') as source:
         return hashlib.file_digest(source, 'sha256').hexdigest()
+
+
+def release_changes(root, head, previous):
+    if not isinstance(previous, str) or not re.fullmatch(r'[0-9a-f]{40}', previous):
+        return ''
+    history = subprocess.run(
+        ['git', '-C', str(root), 'log', '--no-merges', '-n', '30', '--format=%s',
+         f'{previous}..{head}'],
+        capture_output=True, encoding='utf-8', check=False,
+    )
+    if history.returncode:
+        return ''
+    titles = [line.strip() for line in history.stdout.splitlines()
+              if line.strip() and not re.match(r'^(?:ci|docs|build|test)(?:[:(])', line, re.I)
+              and '[skip ci]' not in line]
+    return '\n'.join(f'- {title}' for title in dict.fromkeys(titles))
+
+
+def release_body(notes, manifest_bytes):
+    encoded = base64.b64encode(manifest_bytes).decode('ascii')
+    return f'{notes.rstrip()}\n\n<!-- simple-live-update-manifest:v1\n{encoded}\n-->\n'
 
 
 def version(root, app):
@@ -99,10 +121,10 @@ def main():
                     'Refusing to publish a version older than the latest release')
     output = args.output
     output.mkdir(parents=True, exist_ok=False)
+    changes = release_changes(root, actual, latest.get('target_commitish') if latest else None)
     manifest = {'schemaVersion': 1, 'repository': REPOSITORY, 'sourceSha': actual}
     for app, (name, build) in versions.items():
-        manifest[app] = {'version': name, 'notes': '非官方个人维护版本。源码：' +
-            f'https://github.com/{REPOSITORY}/commit/{actual}', 'packages': []}
+        manifest[app] = {'version': name, 'notes': changes, 'packages': []}
     artifacts = api.pages(f'/actions/runs/{args.run_id}/artifacts', 'artifacts')
     require(len(artifacts) == 10, 'Expected exactly ten installer artifacts')
     for app, label, platform, arch in TARGETS:
@@ -151,7 +173,8 @@ def main():
     fresh = api.request(f'/actions/runs/{args.run_id}')
     require(fresh['run_attempt'] == run['run_attempt'] and fresh['conclusion'] == 'success',
             'Source run changed during preparation')
-    (output / 'update.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    manifest_bytes = (json.dumps(manifest, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+    (output / 'update.json').write_bytes(manifest_bytes)
     shutil.copyfile(root / 'LICENSE', output / 'LICENSE.txt')
     notice_paths = subprocess.check_output(['git', '-C', str(root), 'ls-files', '*LICENSE*', '*NOTICE*'], text=True).splitlines()
     with zipfile.ZipFile(output / 'THIRD-PARTY-NOTICES.zip', 'w', zipfile.ZIP_DEFLATED) as notices:
@@ -161,12 +184,12 @@ def main():
     (output / 'SHA256SUMS.txt').write_text(''.join(
         f'{sha(path)}  {path.name}\n' for path in sorted(output.iterdir()) if path.is_file()), encoding='utf-8')
     title = f'Simple Live {versions["main"][0]} / TV {versions["tv"][0]}'
-    notes = ('- 支持应用内检查更新、自动选择安装包、下载并打开安装器。\n'
+    notes = ((changes + '\n\n') if changes else '') + (
         '- Android / TV 可使用相同签名的新版覆盖安装；桌面端下载对应安装包更新。\n'
         '- iOS IPA 需自行签名安装。\n\n'
         '基于 [Simple Live](https://github.com/xiaoyaocz/dart_simple_live)，'
         '由 Forlooong 维护。源码、GPLv3 许可证及第三方声明见附件。\n')
-    (output.parent / 'release-notes.md').write_text(notes, encoding='utf-8')
+    (output.parent / 'release-notes.md').write_text(release_body(notes, manifest_bytes), encoding='utf-8')
     with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as destination:
         destination.write(f'tag={tag}\nsha={actual}\ntitle={title}\n')
 
