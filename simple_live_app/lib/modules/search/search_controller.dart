@@ -1,81 +1,74 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
-
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/sites.dart';
-import 'package:simple_live_app/modules/search/search_list_controller.dart';
+import 'package:simple_live_app/services/db_service.dart';
 
 import 'aggregate_search.dart';
 
 class AppSearchController extends GetxController
     with GetSingleTickerProviderStateMixin {
-  late TabController tabController;
-  int index = 0;
-
-  var searchMode = 0.obs;
-
-  int get aggregateIndex => Sites.supportSites.length;
-  final aggregate = AggregateSearch({
-    for (final site in Sites.supportSites) site.id: site.liveSite,
-  });
+  late final TabController tabController;
+  final searchMode = 0.obs;
+  final searchController = TextEditingController();
+  final sites = List<Site>.of(Sites.supportSites);
+  late final aggregate = AggregateSearch({
+    for (final site in sites) site.id: site.liveSite,
+  }, localDouyinResults: _localDouyin);
 
   AppSearchController() {
-    tabController = TabController(length: aggregateIndex + 1, vsync: this);
+    tabController = TabController(length: sites.length + 1, vsync: this);
+    aggregate.setActive(true);
     tabController.addListener(_selectTab);
   }
 
   void _selectTab() {
-    final currentIndex = tabController.index;
-    if (index == currentIndex) return;
-    index = currentIndex;
-    aggregate.setActive(index == aggregateIndex);
-    if (index == aggregateIndex) return;
-    final controller = Get.find<SearchListController>(
-      tag: Sites.supportSites[index].id,
-    );
-    if (controller.list.isEmpty &&
-        !controller.pageEmpty.value &&
-        controller.keyword.isNotEmpty) {
-      controller.refreshData();
+    final index = tabController.index;
+    aggregate.selectPlatform(index == 0 ? null : sites[index - 1].id);
+  }
+
+  Iterable<AggregateSearchResult> _localDouyin(String keyword) sync* {
+    final term = keyword.toLowerCase();
+    final url = Uri.tryParse(keyword);
+    final linkedRoom =
+        url?.host == 'live.douyin.com' && url?.pathSegments.length == 1
+        ? url!.pathSegments.single
+        : null;
+    final db = DBService.instance;
+    for (final (site, room, author, source) in [
+      for (final item in db.followBox.values)
+        (item.siteId, item.roomId, item.userName, '本机关注'),
+      for (final item in db.historyBox.values)
+        (item.siteId, item.roomId, item.userName, '观看历史'),
+    ]) {
+      if (site == 'douyin' &&
+          RegExp(r'^\d{1,16}$').hasMatch(room) &&
+          (author.toLowerCase().contains(term) ||
+              room == term ||
+              room == linkedRoom)) {
+        yield (
+          roomId: room,
+          author: author,
+          title: null,
+          live: Sites.allSites[site]?.liveSite.peekRoomStatus(room)?.live,
+          source: source,
+        );
+      }
     }
   }
 
-  StreamSubscription<dynamic>? streamSubscription;
-
-  TextEditingController searchController = TextEditingController();
-
-  @override
-  void onInit() {
-    for (var site in Sites.supportSites) {
-      // if (site.id == Constant.kDouyin) {
-      //   Get.put(DouyinSearchController(site));
-      // } else {
-      Get.put(SearchListController(site), tag: site.id);
-      //}
+  void onKeywordEdited(String value) {
+    if (aggregate.keyword.isNotEmpty && value.trim() != aggregate.keyword) {
+      aggregate.reset('', searchAnchors: searchMode.value == 1);
     }
-
-    super.onInit();
   }
 
-  void doSearch() {
-    final keyword = searchController.text.trim();
-    aggregate.reset(keyword, searchAnchors: searchMode.value == 1);
-    for (final site in Sites.supportSites) {
-      final controller = Get.find<SearchListController>(tag: site.id);
-      controller.clear();
-      controller.keyword = keyword;
-      controller.searchMode.value = searchMode.value;
-    }
-    if (keyword.isEmpty || index == aggregateIndex) return;
-    Get.find<SearchListController>(
-      tag: Sites.supportSites[index].id,
-    ).refreshData();
-  }
+  void doSearch() => aggregate.reset(
+    searchController.text,
+    searchAnchors: searchMode.value == 1,
+  );
 
   @override
   void onClose() {
-    streamSubscription?.cancel();
     tabController.dispose();
     searchController.dispose();
     aggregate.dispose();

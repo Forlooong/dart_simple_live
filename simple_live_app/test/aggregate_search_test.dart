@@ -54,6 +54,45 @@ void main() {
       second.pending[('newer', 1)]!.complete(_result('new'));
       await Future<void>.delayed(Duration.zero);
       expect(search.platforms['huya']!.results['1']!.author, 'new');
+      expect(search.ordered, [('bilibili', '1'), ('huya', '1')]);
+    },
+  );
+  test('platform tabs request only the selected platform', () {
+    final first = _Site();
+    final second = _Site();
+    final search = AggregateSearch({'bilibili': first, 'huya': second});
+    addTearDown(search.dispose);
+    search.setActive(true);
+    search.selectPlatform('huya');
+    search.reset('test', searchAnchors: false);
+    expect(first.pending, isEmpty);
+    expect(second.pending, hasLength(1));
+    search.selectPlatform('bilibili');
+    expect(second.contexts[('test', 1)]!.isCancelled, isTrue);
+    expect(first.pending, hasLength(1));
+  });
+  test(
+    'Douyin anchor search retains local matches without calling remote search',
+    () {
+      final douyin = _Site();
+      final search = AggregateSearch(
+        {'douyin': douyin},
+        localDouyinResults: (_) => [
+          (
+            roomId: '42',
+            author: '本机主播',
+            title: null,
+            live: null,
+            source: '本机关注',
+          ),
+        ],
+      );
+      addTearDown(search.dispose);
+      search.setActive(true);
+      search.reset('本机主播', searchAnchors: true);
+      expect(search.supportsRemote('douyin'), false);
+      expect(douyin.pending, isEmpty);
+      expect(search.platforms['douyin']!.results['42']!.source, '本机关注');
     },
   );
 }

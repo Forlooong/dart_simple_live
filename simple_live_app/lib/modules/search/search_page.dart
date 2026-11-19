@@ -2,10 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:simple_live_app/app/app_style.dart';
-import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/modules/search/search_controller.dart';
 import 'package:simple_live_app/modules/search/aggregate_search_view.dart';
-import 'package:simple_live_app/modules/search/search_list_view.dart';
 
 class SearchPage extends GetView<AppSearchController> {
   const SearchPage({Key? key}) : super(key: key);
@@ -23,6 +21,7 @@ class SearchPage extends GetView<AppSearchController> {
           title: TextField(
             controller: controller.searchController,
             autofocus: true,
+            onChanged: controller.onKeywordEdited,
             decoration: InputDecoration(
               hintText: "输入主播或直播间关键词",
               border: OutlineInputBorder(borderRadius: AppStyle.radius24),
@@ -65,23 +64,30 @@ class SearchPage extends GetView<AppSearchController> {
           bottom: TabBar(
             controller: controller.tabController,
             padding: EdgeInsets.zero,
-            tabAlignment: TabAlignment.center,
+            tabAlignment: TabAlignment.start,
             tabs: [
-              for (final site in Sites.supportSites)
-                Tab(
-                  child: Row(
-                    children: [
-                      Image.asset(
-                        site.logo,
-                        width: 24,
-                        excludeFromSemantics: true,
-                      ),
-                      AppStyle.hGap8,
-                      Text(site.name),
-                    ],
+              _platformTab(
+                '全部平台',
+                Builder(
+                  builder: (context) => ColoredBox(
+                    color: Theme.of(context).colorScheme.primaryContainer,
+                    child: Icon(
+                      Icons.apps,
+                      size: 19,
+                      color: Theme.of(context).colorScheme.onPrimaryContainer,
+                    ),
                   ),
                 ),
-              const Tab(text: '全部平台'),
+              ),
+              for (final site in controller.sites)
+                _platformTab(
+                  site.name,
+                  Image.asset(
+                    site.logo,
+                    fit: BoxFit.cover,
+                    excludeFromSemantics: true,
+                  ),
+                ),
             ],
             labelPadding: AppStyle.edgeInsetsH20,
             isScrollable: true,
@@ -92,11 +98,27 @@ class SearchPage extends GetView<AppSearchController> {
           physics: const NeverScrollableScrollPhysics(),
           controller: controller.tabController,
           children: [
-            for (final site in Sites.supportSites) SearchListView(site.id),
             AggregateSearchView(controller.aggregate),
+            for (final site in controller.sites)
+              AggregateSearchView(controller.aggregate, platform: site.id),
           ],
         ),
       ),
     );
   }
+
+  Tab _platformTab(String label, Widget icon) => Tab(
+    child: Row(
+      children: [
+        ExcludeSemantics(
+          child: ClipRRect(
+            borderRadius: AppStyle.radius4,
+            child: SizedBox.square(dimension: 24, child: icon),
+          ),
+        ),
+        AppStyle.hGap8,
+        Text(label),
+      ],
+    ),
+  );
 }

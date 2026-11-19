@@ -6,6 +6,7 @@ typedef AggregateSearchResult = ({
   String author,
   String? title,
   bool? live,
+  String? source,
 });
 
 class PlatformSearchResults {
@@ -17,11 +18,17 @@ class PlatformSearchResults {
 }
 
 class AggregateSearch extends ChangeNotifier {
-  AggregateSearch(this.sites, {PlatformRecovery? recovery})
-    : _recovery = recovery ?? PlatformRecovery();
+  AggregateSearch(
+    this.sites, {
+    PlatformRecovery? recovery,
+    this.localDouyinResults,
+  }) : _recovery = recovery ?? PlatformRecovery();
 
   final Map<String, LiveSite> sites;
   final PlatformRecovery _recovery;
+  final Iterable<AggregateSearchResult> Function(String)? localDouyinResults;
+  final ordered = <(String, String)>[];
+  String? selectedPlatform;
   final platforms = <String, PlatformSearchResults>{};
   final _requests = <String, RequestContext>{};
   String keyword = '';
@@ -29,11 +36,36 @@ class AggregateSearch extends ChangeNotifier {
   bool active = false;
   bool _disposed = false;
 
-  bool supports(String site) => !anchors || site != 'douyin';
+  bool supportsRemote(String id) => !anchors || id != 'douyin';
+
+  bool _visible(String id) =>
+      selectedPlatform == null || selectedPlatform == id;
+
+  void selectPlatform(String? id) {
+    if (selectedPlatform == id) return;
+    selectedPlatform = id;
+    for (final entry in _requests.entries.toList()) {
+      if (_visible(entry.key)) continue;
+      _requests.remove(entry.key);
+      entry.value.cancel();
+      platforms[entry.key]?.loading = false;
+    }
+    _start();
+    notifyListeners();
+  }
+
+  void _store(String id, AggregateSearchResult item) {
+    final roomId = item.roomId;
+    if (roomId.isEmpty || roomId == 'null') return;
+    final results = platforms[id]!.results;
+    if (!results.containsKey(roomId)) ordered.add((id, roomId));
+    results[roomId] = item;
+  }
 
   void reset(String value, {required bool searchAnchors}) {
     _cancel();
     keyword = value.trim();
+    ordered.clear();
     anchors = searchAnchors;
     platforms
       ..clear()
@@ -55,11 +87,26 @@ class AggregateSearch extends ChangeNotifier {
   }
 
   void _start() {
-    if (keyword.isEmpty) return;
+    if (!active || keyword.isEmpty) return;
     for (final id in sites.keys) {
       final state = platforms[id];
-      if (state?.nextPage == 1 && state?.failure == null) load(id);
+      if (!_visible(id) ||
+          state == null ||
+          state.nextPage != 1 ||
+          state.failure != null ||
+          state.loading) {
+        continue;
+      }
+      if (id == 'douyin' && state.results.isEmpty) {
+        for (final item
+            in localDouyinResults?.call(keyword) ??
+                const <AggregateSearchResult>[]) {
+          _store(id, item);
+        }
+      }
+      if (supportsRemote(id)) load(id);
     }
+    notifyListeners();
   }
 
   void _cancel() {
@@ -78,10 +125,12 @@ class AggregateSearch extends ChangeNotifier {
         keyword.isEmpty ||
         state == null ||
         site == null ||
-        !supports(id) ||
+        !_visible(id) ||
+        !supportsRemote(id) ||
         !state.hasMore ||
-        state.loading)
+        state.loading) {
       return;
+    }
     final version = site.statusConfigurationVersion;
     final block = _recovery.blocked(id, version);
     if (block != null) {
@@ -108,6 +157,7 @@ class AggregateSearch extends ChangeNotifier {
                 result.items.map<AggregateSearchResult>(
                   (item) => (
                     roomId: item.roomId,
+                    source: null,
                     author: item.userName,
                     title: item.roomTitle,
                     live: item.statusKnown
@@ -123,6 +173,7 @@ class AggregateSearch extends ChangeNotifier {
               result.items.map<AggregateSearchResult>(
                 (item) => (
                   roomId: item.roomId,
+                  source: null,
                   author: item.userName,
                   title: item.title,
                   live:
@@ -139,8 +190,7 @@ class AggregateSearch extends ChangeNotifier {
         return;
       }
       for (final item in items) {
-        if (item.roomId.isEmpty || item.roomId == 'null') continue;
-        state.results[item.roomId] = item;
+        _store(id, item);
       }
       state.hasMore = more;
       state.nextPage++;
