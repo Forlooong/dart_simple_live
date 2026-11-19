@@ -118,13 +118,14 @@ class InstallerIdentityTest(unittest.TestCase):
     def test_unified_workflow_keeps_independent_platforms_and_installers(self):
         workflow = (ROOT / ".github/workflows/installers.yml").read_text(encoding="utf-8")
         jobs = re.findall(r"^  ([a-z][a-z0-9-]*):$", workflow.split("jobs:\n", 1)[1], re.M)
-        self.assertEqual(jobs, ["android-apk", "tv-apk", "ios", "macos", "windows", "linux"])
+        self.assertEqual(jobs, ["android-apk", "tv-apk", "windows", "linux"])
         self.assertNotRegex(workflow, r"(?m)^    needs:")
+        self.assertNotRegex(workflow, r"(?m)^    runs-on: macos")
         upload_refs = re.findall(r"uses: actions/upload-artifact@([^\s]+)", workflow)
-        self.assertEqual(len(upload_refs), 10)
+        self.assertEqual(len(upload_refs), 8)
         for ref in upload_refs:
             self.assertRegex(ref, r"^[0-9a-f]{40}$")
-        self.assertEqual(workflow.count("archive: false"), 10)
+        self.assertEqual(workflow.count("archive: false"), 8)
         self.assertNotIn("allowDebugReleaseSigning=true", workflow)
         self.assertNotIn("gh release", workflow)
         self.assertIn("AppId=com.xycz.simplelive", workflow)

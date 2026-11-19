@@ -13,11 +13,10 @@ from publish_prerelease import GitHub, require
 from verify_apk_signer import expected_signer, verify_report
 
 REPOSITORY = 'Forlooong/dart_simple_live'
-JOBS = {'android-apk', 'tv-apk', 'ios', 'macos', 'windows', 'linux'}
+JOBS = {'android-apk', 'tv-apk', 'windows', 'linux'}
 TARGETS = [('main', 'Android', 'android', arch) for arch in ('arm32', 'arm64', 'x64')] + [
     ('tv', 'Android-TV', 'android', arch) for arch in ('arm32', 'arm64', 'x64')] + [
-    ('main', 'Windows', 'windows', 'x64'), ('main', 'macOS', 'macos', 'universal'),
-    ('main', 'Linux', 'linux', 'x64'), ('main', 'iOS', 'ios', 'arm64')]
+    ('main', 'Windows', 'windows', 'x64'), ('main', 'Linux', 'linux', 'x64')]
 
 
 def sha(path):
@@ -67,9 +66,9 @@ def validate_run(run, jobs):
             run['path'] == '.github/workflows/installers.yml' and
             run['status'] == 'completed' and run['conclusion'] == 'success',
             'Require a successful trusted master installer run')
-    require({j['name'] for j in jobs} == JOBS and len(jobs) == 6 and
+    require({j['name'] for j in jobs} == JOBS and len(jobs) == len(JOBS) and
             all(j['conclusion'] == 'success' and j['run_attempt'] == run['run_attempt']
-                for j in jobs), 'All six jobs must succeed in the same attempt')
+                for j in jobs), 'All four jobs must succeed in the same attempt')
 
 
 def verify_uploaded(assets, output):
@@ -126,13 +125,13 @@ def main():
     for app, (name, build) in versions.items():
         manifest[app] = {'version': name, 'notes': changes, 'packages': []}
     artifacts = api.pages(f'/actions/runs/{args.run_id}/artifacts', 'artifacts')
-    require(len(artifacts) == 10, 'Expected exactly ten installer artifacts')
+    require(len(artifacts) == len(TARGETS),
+            f'Expected exactly {len(TARGETS)} installer artifacts')
     for app, label, platform, arch in TARGETS:
         name, build = versions[app]
         identity = f'{name}+{build}-r{run["run_number"]}.{run["run_attempt"]}-{actual[:7]}'
         suffix = {'android': f'{arch}-ReleaseSigned.apk',
-                  'windows': 'x64-Setup-Unsigned.exe', 'macos': 'universal-Unsigned.dmg',
-                  'linux': 'x64.deb', 'ios': 'arm64-Unsigned.ipa'}[platform]
+                  'windows': 'x64-Setup-Unsigned.exe', 'linux': 'x64.deb'}[platform]
         filename = f'Simple-Live-{identity}-{label}-{suffix}'
         matches = [a for a in artifacts if a['name'] == filename]
         require(len(matches) == 1, f'Missing installer {filename}')
@@ -186,7 +185,7 @@ def main():
     title = f'Simple Live {versions["main"][0]} / TV {versions["tv"][0]}'
     notes = ((changes + '\n\n') if changes else '') + (
         '- Android / TV 可使用相同签名的新版覆盖安装；桌面端下载对应安装包更新。\n'
-        '- iOS IPA 需自行签名安装。\n\n'
+        '- 本分支提供 Android、Android TV、Windows 和 Linux 安装包。\n\n'
         '基于 [Simple Live](https://github.com/xiaoyaocz/dart_simple_live)，'
         '由 Forlooong 维护。源码、GPLv3 许可证及第三方声明见附件。\n')
     (output.parent / 'release-notes.md').write_text(release_body(notes, manifest_bytes), encoding='utf-8')

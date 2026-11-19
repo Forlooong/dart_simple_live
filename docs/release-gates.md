@@ -6,7 +6,7 @@ until the applicable gates below have evidence for the **same full commit SHA**.
 
 ## Required evidence
 
-- All six independent jobs in `app build action` succeed on the
+- All four independent jobs in `Build installers` succeed on the
   final SHA. Missing Android/TV signing keys are a blocker, not a successful build. A previous green run
   does not validate later source or packaging changes. Record workflow URLs,
   attempt numbers, artifact names and SHA-256 checksums.
@@ -22,9 +22,8 @@ until the applicable gates below have evidence for the **same full commit SHA**.
   returns `16384`) and a normal device: launch, each playback backend, follow-list
   refresh/error recovery, notifications and repeated enter/exit. Static ELF/ZIP
   checks do not establish runtime compatibility. Repeat relevant tests on TV.
-- Verify native loading and platform packaging checks on each host. iOS artifacts
-  are unsigned and require authorized Apple signing; macOS artifacts are unsigned
-  and unnotarized; Windows packages are unsigned. Record these limitations.
+- Verify native loading and packaging on each build host. Windows packages are
+  unsigned. Record this limitation.
 
 Reference: [Android's 16 KiB page-size guidance](https://developer.android.com/guide/practices/page-sizes).
 The verifier examines every `lib/<abi>/*.so`, matches ELF class/machine to its split
@@ -60,16 +59,13 @@ A historical identity is needed only if old-version compatibility is chosen.
 
 ## Publication
 
-The unified workflow uploads only APK, IPA, DMG, EXE and DEB files as individual
+The unified workflow uploads only APK, EXE and DEB files as individual
 Actions artifacts, retained for 14 days. It does not create tags or GitHub Releases.
 Checksums/build details stay in the workflow summary, not extra downloaded files.
 Never advertise historical TestSigned builds as seamless upgrades. A green build
 does not establish a matching old signing key or replace actual device upgrade tests.
 
-The iOS IPA remains unsigned and cannot be installed directly. Compatible Apple
-signing/provisioning and signed distribution compliance must be verified separately.
-Its existing build-number representation is preserved, not remapped to a lower
-value. Windows CI checks repeated installation, previous-directory reuse and a
+Windows CI checks repeated installation, previous-directory reuse and a
 data sentinel; that is a packaging regression check, not an old-version/user-data
 migration certification. Missing gates remain visible as blockers.
 
@@ -79,8 +75,7 @@ migration certification. Missing gates remain visible as blockers.
 | --- | --- |
 | Android phone | Start, aggregate search, play, follow, preview WebDAV changes, apply and roll back offline. Check notification permission, background polling, a quiet-hours summary, its tap target and a subscription cancelled during a check. Repeat the main flow with TalkBack and enlarged text. |
 | Android TV | Start, search, open playback, adjust quality and return to follows using the remote. Verify focus after a list refresh and after closing a player panel. Check that paired account transfer asks for permission on the receiving device. |
-| Windows, macOS and Linux | Start, perform an aggregate search with one unavailable platform, adjust playback with the keyboard and return to follows. Verify the WebDAV preview and rollback dialogs with the keyboard. |
-| Signed iOS | Verify startup, search, playback, follows, WebDAV restore and rollback with VoiceOver and enlarged text. |
+| Windows and Linux | Start, perform an aggregate search with one unavailable platform, adjust playback with the keyboard and return to follows. Verify the WebDAV preview and rollback dialogs with the keyboard. |
 
 The PR workflow runs deterministic regression suites for core, the main app and
 TV using the release Flutter version. Record the results and each manual matrix

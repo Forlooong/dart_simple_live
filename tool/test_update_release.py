@@ -32,10 +32,16 @@ class UpdateReleaseTest(unittest.TestCase):
         self.jobs = [{'name': name, 'conclusion': 'success', 'run_attempt': 2}
                      for name in JOBS]
 
-    def test_complete_run_and_ten_target_packages(self):
+    def test_complete_run_and_eight_target_packages(self):
         validate_run(self.run, self.jobs)
-        self.assertEqual(len(TARGETS), 10)
-        self.assertEqual(len(set(TARGETS)), 10)
+        self.assertEqual(len(TARGETS), 8)
+        self.assertEqual(len(set(TARGETS)), 8)
+        self.assertEqual(JOBS, {'android-apk', 'tv-apk', 'windows', 'linux'})
+        self.assertEqual({target[2] for target in TARGETS}, {'android', 'windows', 'linux'})
+        for name in ('ios', 'macos'):
+            extra = {'name': name, 'conclusion': 'success', 'run_attempt': 2}
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                validate_run(self.run, [*self.jobs, extra])
 
     def test_untrusted_or_incomplete_run_is_rejected(self):
         for key, value in [('event', 'pull_request'), ('head_branch', 'other'),

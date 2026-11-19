@@ -1,15 +1,15 @@
 # Unified installer builds and version management
 
 One workflow, `Build installers` (`installers.yml`), runs on
-`master` pushes or manually. Its six independent jobs build Android, Android TV,
-iOS, macOS, Windows and Linux. A failed platform does not prevent the other jobs
+`master` pushes or manually. Its four independent jobs build Android, Android TV,
+Windows and Linux. A failed platform does not prevent the other jobs
 from completing. Installer builds do not create tags or GitHub Releases.
 
 ## Manual publication and application updates
 
 The separate `Prepare or publish update` workflow accepts a successful `Build
-installers` run ID from this repository's `master` branch. All six jobs must pass
-in the same attempt. It checks the ten installer artifacts against their GitHub
+installers` run ID from this repository's `master` branch. All four jobs must pass
+in the same attempt. It checks the eight installer artifacts against their GitHub
 SHA-256 digests and rechecks APK signatures, package IDs, ABI and versions. Select
 `publish: false` first to inspect the review artifact. Select `publish: true` only
 after reviewing the packages, licenses and source. Publication creates a draft,
@@ -36,10 +36,9 @@ size and SHA-256 before installation. Android/TV match the installed process ABI
 certificate, package ID, SDK and increasing actual versionCode; the system
 installer confirms installation. Permission denial opens the source-install
 settings; after authorization, check again. No uninstall or data clearing occurs.
-Windows opens the downloaded Setup EXE; macOS opens DMG; Linux opens DEB through
-the system handler. Users finish installation and restart the app themselves.
-iOS shows the new version and opens the release page; unsigned IPA is never
-presented as directly installable. Unreachable GitHub or missing desktop file
+Windows opens the downloaded Setup EXE and Linux opens the DEB through the system
+handler. Users finish installation and restart the app themselves.
+Unreachable GitHub or missing desktop file
 handlers are reported during manual checks. No mirror, embedded token, background
 download, forced update or telemetry is used.
 
@@ -51,7 +50,7 @@ required before claiming a tested end-to-end update.
 
 ## Version source of truth
 
-The main app's five platforms share `simple_live_app/pubspec.yaml`; TV uses
+The main app's three platforms share `simple_live_app/pubspec.yaml`; TV uses
 `simple_live_tv_app/pubspec.yaml`. Installed versions come from these committed
 files, never GitHub run counters. Replacing a workflow or rerunning a build cannot
 reset the installed version. Artifact filenames additionally include run number,
@@ -89,15 +88,6 @@ building, including Android's maximum versionCode and Windows uint16 components.
   CI checks actual manifest IDs and version values. Updates must use the same ABI,
   package ID and signing identity with an increased versionCode. Switching ABI is
   not guaranteed to be an upgrade, because offsets differ.
-- iOS: unsigned arm64 IPA, with unchanged bundle ID `com.xycz.simple-live` and
-  checked source version/build metadata. It requires appropriate Apple signing
-  and provisioning before installation. Consistent signing/entitlements and
-  signed-distribution version compliance remain separate prerequisites. Existing
-  build-number representation is preserved rather than reset or remapped lower.
-- macOS: unsigned/unnotarized universal DMG. The bundle ID remains
-  `com.xycz.simpleLiveApp`; CI checks bundle version/build and both architectures.
-  Replace the application in Applications without deleting its user data. macOS
-  may block an unsigned application; no notarization claim is made.
 - Windows: unsigned x64 installer EXE. Inno AppId remains `com.xycz.simplelive` and
   the default per-user path is `%LOCALAPPDATA%\Programs\Simple Live`. Existing
   install locations are reused. CI verifies executable numeric version and a
@@ -134,17 +124,11 @@ before claiming end-to-end upgrade success.
 
 ## Downloads and evidence
 
-Only the ten installer files are uploaded: six APKs, one IPA, one DMG, one EXE and
-one DEB. Each is an individual artifact with `archive: false`, retained for 14 days.
+The workflow uploads eight installer files: six APKs, one EXE and one DEB. Each is an individual artifact with `archive: false`, retained for 14 days.
 No outer ZIPs, source bundles, checksum files or lockfiles are extra downloads.
 Summaries contain only the package version and download links. Checksums and
 build details remain in the step logs. Native libraries,
 ABI/alignment checks and existing main/TV regression tests remain enabled.
-
-The iOS simulator command has a 25-minute deadline covering compilation and
-execution. Flutter's default 12-minute suite-loading timeout is disabled because
-it also counts the cold Xcode build; test assertions and native execution budgets
-remain enabled.
 
 See [release gates](release-gates.md) for signing, runtime and real-device upgrade
 requirements. A version check and successful compile alone do not prove an

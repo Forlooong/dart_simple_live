@@ -24,11 +24,11 @@
 ## APP支持平台
 
 - [x] Android
-- [x] iOS
 - [x] Windows `BETA`
-- [x] MacOS `BETA`
 - [x] Linux `BETA`
 - [x] Android TV `BETA`
+
+当前维护 Android、Android TV、Windows 和 Linux。iOS 和 macOS 已停止维护及发布。
 
 ## 项目结构
 

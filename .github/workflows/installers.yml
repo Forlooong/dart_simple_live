@@ -1,9 +1,9 @@
 name: Build installers
-run-name: "Build all platforms · Main 1.12.26+11127 · TV 1.7.17+10622 · #${{ github.run_number }}"
+run-name: "Build all platforms · Main 1.12.27+11128 · TV 1.7.18+10623 · #${{ github.run_number }}"
 
 on:
   push:
-    branches: [master, codex/release-acceptance]
+    branches: [master]
     paths-ignore:
       - .github/workflows/update-release.yml
       - tool/prepare_update_release.py
@@ -463,220 +463,6 @@ jobs:
         run: |
           rm -f android/key.properties "$RUNNER_TEMP/simple-live-tv-release.jks"
 
-  ios:
-    runs-on: macos-15
-    permissions:
-      contents: read
-      actions: write
-    env:
-      # connectivity_plus uses APIs introduced in the Apple 26 SDKs.
-      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
-    timeout-minutes: 60
-    defaults:
-      run:
-        working-directory: simple_live_app
-        shell: bash
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.12'
-      - name: Check version and prepare build identity
-        id: metadata
-        run: python ../tool/version.py metadata main
-      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
-        with:
-          flutter-version: '3.38.10'
-          channel: stable
-          cache: true
-      - name: Set up Rust native targets
-        uses: ./.github/actions/setup-native
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
-      - name: Restore locked packages
-        run: flutter pub get --enforce-lockfile
-      - uses: ./.github/actions/check-native
-      - name: Test native assets on iOS simulator
-        run: python ../tool/test_ios_native.py
-      - name: Verify selected Xcode
-        run: |
-          test -d "$DEVELOPER_DIR" || { echo "Missing selected Xcode: $DEVELOPER_DIR"; exit 1; }
-          xcodebuild -version
-          xcrun --sdk iphoneos --show-sdk-version
-      - name: Build unsigned iOS app
-        run: flutter build ios --release --no-codesign --no-pub
-      - name: Verify device native libraries
-        run: python ../tool/verify_native_bundle.py ios build/ios/iphoneos/Runner.app
-      - name: Verify Apple package version and identity
-        env:
-          PACKAGE_VERSION: ${{ steps.metadata.outputs.package_version }}
-        run: python ../tool/verify_installer_identity.py ios "build/ios/iphoneos/Runner.app" "$PACKAGE_VERSION"
-      - name: Package unsigned IPA
-        env:
-          APP_VERSION: ${{ steps.metadata.outputs.artifact_version }}
-        run: |
-          set -euo pipefail
-          test -d build/ios/iphoneos/Runner.app
-          mkdir -p build/ipa/Payload build/artifacts
-          ditto build/ios/iphoneos/Runner.app build/ipa/Payload/Runner.app
-          (cd build/ipa && zip -qry "../artifacts/Simple-Live-${APP_VERSION}-iOS-arm64-Unsigned.ipa" Payload)
-          unzip -t build/artifacts/*.ipa
-          (cd build/artifacts && shasum -a 256 *.ipa > SHA256SUMS.txt)
-          printf '%s\n' "iOS $APP_VERSION · arm64 · unsigned IPA" 'Requires signing with an Apple development/distribution identity before installation.'
-      - name: Upload iOS package
-        id: upload_package
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: Simple-Live-${{ steps.metadata.outputs.artifact_version }}-iOS-arm64-Unsigned
-          path: simple_live_app/build/artifacts/*.ipa
-          archive: false
-          if-no-files-found: error
-          retention-days: 14
-      - name: Summarize download
-        env:
-          DOWNLOAD_URL: ${{ steps.upload_package.outputs.artifact-url }}
-        run: printf '[iOS IPA · unsigned](%s)\n' "$DOWNLOAD_URL" >> "$GITHUB_STEP_SUMMARY"
-      - name: Remove previous build records once
-        if: github.repository == 'Forlooong/dart_simple_live' && github.run_number == 1
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          import time
-          from urllib.error import HTTPError
-          from urllib.request import Request, urlopen
-
-          base = 'https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY']
-          headers = {'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
-                     'Accept': 'application/vnd.github+json',
-                     'X-GitHub-Api-Version': '2022-11-28'}
-
-          def api(path, method='GET'):
-              with urlopen(Request(base + path, headers=headers, method=method), timeout=30) as response:
-                  return json.load(response) if method == 'GET' else None
-
-          expected = {'android-apk', 'tv-apk', 'macos', 'windows', 'linux'}
-          for attempt in range(30):
-              jobs = api('/actions/runs/' + os.environ['GITHUB_RUN_ID'] + '/jobs?per_page=100')['jobs']
-              peers = {job['name']: job for job in jobs if job['name'] in expected}
-              if set(peers) == expected and all(job['conclusion'] == 'success' for job in peers.values()):
-                  break
-              if any(job['status'] == 'completed' and job['conclusion'] != 'success' for job in peers.values()):
-                  raise RuntimeError('A platform failed; preserving previous builds.')
-              time.sleep(10)
-          else:
-              raise RuntimeError('Other platforms have not finished; preserving previous builds.')
-
-          for run_id in (39719646047, 39732230598, 39733299758, 39738278725, 39740645168):
-              try:
-                  api('/actions/runs/' + str(run_id), 'DELETE')
-              except HTTPError as error:
-                  if error.code != 404:
-                      raise
-              print('Removed previous run', run_id)
-          PY
-
-  macos:
-    runs-on: macos-15
-    env:
-      # connectivity_plus uses APIs introduced in the Apple 26 SDKs.
-      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
-    timeout-minutes: 60
-    defaults:
-      run:
-        working-directory: simple_live_app
-        shell: bash
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.12'
-      - name: Check version and prepare build identity
-        id: metadata
-        run: python ../tool/version.py metadata main
-      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
-        with:
-          flutter-version: '3.38.10'
-          channel: stable
-          cache: true
-      - name: Set up Rust native targets
-        uses: ./.github/actions/setup-native
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
-      - name: Build console with native asset bundle
-        working-directory: simple_live_console
-        run: |
-          dart pub get --enforce-lockfile
-          dart build cli --target bin/simple_live_console.dart --output build/cli
-          python ../tool/verify_native_bundle.py cli build/cli
-      - name: Restore locked packages
-        run: flutter pub get --enforce-lockfile
-      - uses: ./.github/actions/check-native
-      - name: Configure macOS release
-        run: flutter build macos --release --no-pub --config-only
-      - name: Build unsigned universal macOS app
-        run: |
-          xcodebuild -workspace macos/Runner.xcworkspace -scheme Runner \
-            -configuration Release -derivedDataPath "$PWD/build/macos" \
-            -destination 'generic/platform=macOS' \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= \
-            ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO \
-            COMPILER_INDEX_STORE_ENABLE=NO -quiet
-      - name: Verify both native library architectures
-        run: python ../tool/verify_native_bundle.py macos "build/macos/Build/Products/Release/Simple Live.app"
-      - name: Verify Apple package version and identity
-        env:
-          PACKAGE_VERSION: ${{ steps.metadata.outputs.package_version }}
-        run: python ../tool/verify_installer_identity.py macos "build/macos/Build/Products/Release/Simple Live.app" "$PACKAGE_VERSION"
-      - name: Package macOS app
-        env:
-          APP_VERSION: ${{ steps.metadata.outputs.artifact_version }}
-        run: |
-          set -euo pipefail
-          app='build/macos/Build/Products/Release/Simple Live.app'
-          test -d "$app"
-          lipo "$app/Contents/MacOS/Simple Live" -verify_arch arm64 x86_64
-          mkdir -p build/artifacts
-          mkdir -p build/dmg-root
-          ditto "$app" 'build/dmg-root/Simple Live.app'
-          ln -s /Applications build/dmg-root/Applications
-          dmg="build/artifacts/Simple-Live-${APP_VERSION}-macOS-universal-Unsigned.dmg"
-          hdiutil create -volname 'Simple Live' -srcfolder build/dmg-root -ov -format UDZO "$dmg"
-          hdiutil verify "$dmg"
-          mountpoint="$RUNNER_TEMP/simple-live-dmg"
-          mkdir -p "$mountpoint"
-          hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mountpoint"
-          trap 'hdiutil detach "$mountpoint"' EXIT
-          python ../tool/verify_native_bundle.py macos "$mountpoint/Simple Live.app"
-          test "$(readlink "$mountpoint/Applications")" = /Applications
-          lipo "$mountpoint/Simple Live.app/Contents/MacOS/Simple Live" -verify_arch arm64 x86_64
-          hdiutil detach "$mountpoint"
-          trap - EXIT
-          (cd build/artifacts && shasum -a 256 *.dmg > SHA256SUMS.txt)
-          printf '%s\n' "macOS $APP_VERSION · arm64 + x64 · unsigned DMG" 'Open the DMG and drag Simple Live to Applications. Not notarized; macOS may prevent opening this build.'
-          cat build/artifacts/SHA256SUMS.txt
-      - name: Upload macOS package
-        id: upload_package
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: Simple-Live-${{ steps.metadata.outputs.artifact_version }}-macOS-universal-Unsigned
-          path: simple_live_app/build/artifacts/*.dmg
-          archive: false
-          if-no-files-found: error
-          retention-days: 14
-      - name: Summarize download
-        env:
-          DOWNLOAD_URL: ${{ steps.upload_package.outputs.artifact-url }}
-        run: printf '[macOS DMG · unsigned](%s)\n' "$DOWNLOAD_URL" >> "$GITHUB_STEP_SUMMARY"
-
   windows:
     runs-on: windows-2022
     timeout-minutes: 60
@@ -857,9 +643,9 @@ jobs:
           test -x "$bundle/simple_live_app"
           root=build/deb-root
           mkdir -p "$root/DEBIAN" "$root/opt/simple-live" "$root/usr/bin" \
-            "$root/usr/share/applications" "$root/usr/share/icons/hicolor/256x256/apps" build/artifacts
+            "$root/usr/share/applications" "$root/usr/share/icons/hicolor/192x192/apps" build/artifacts
           cp -a "$bundle/." "$root/opt/simple-live/"
-          install -m 644 macos/Runner/Assets.xcassets/AppIcon.appiconset/icon-256.png "$root/usr/share/icons/hicolor/256x256/apps/com.xycz.simple_live_app.png"
+          install -m 644 ../assets/logo.png "$root/usr/share/icons/hicolor/192x192/apps/com.xycz.simple_live_app.png"
           cat > "$root/usr/bin/simple-live" <<'EOF'
           #!/bin/sh
           exec /opt/simple-live/simple_live_app "$@"

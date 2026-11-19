@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       run_id:
-        description: Successful master Build installers run ID (all six platforms)
+        description: Successful master Build installers run ID (all four platforms)
         required: true
         type: string
       publish:
