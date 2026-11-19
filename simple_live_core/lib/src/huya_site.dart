@@ -418,6 +418,9 @@ class HuyaSite extends LiveSite {
         ayyuid: tLiveInfo["lYyid"] ?? 0,
         topSid: topSid ?? 0,
         subSid: subSid ?? 0,
+        presenterUid: int.tryParse(
+          (roomInfo['profileInfo']?['uid'] ?? roomInfo['presenterUid']).toString(),
+        ) ?? 0,
       ),
       url: "https://www.huya.com/$roomId",
     );
@@ -452,6 +455,8 @@ class HuyaSite extends LiveSite {
             "0");
     jsonObj["topSid"] = topSid;
     jsonObj["subSid"] = subSid;
+    jsonObj['presenterUid'] =
+        RegExp(r'"lPresenterUid"\s*:\s*(\d+)').firstMatch(resultText)?.group(1);
     return jsonObj;
   }
 

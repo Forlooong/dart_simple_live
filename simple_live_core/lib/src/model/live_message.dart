@@ -4,7 +4,7 @@ enum LiveMessageType {
   /// 聊天
   chat,
 
-  /// 礼物,暂时不支持
+  /// 礼物
   gift,
 
   /// 在线人数
@@ -83,6 +83,43 @@ class LiveMessageColor {
   String toString() {
     return "#${r.toRadixString(16).padLeft(2, '0')}${g.toRadixString(16).padLeft(2, '0')}${b.toRadixString(16).padLeft(2, '0')}";
   }
+}
+
+class LiveGiftMessage {
+  const LiveGiftMessage(
+    this.sender,
+    this.name,
+    this.quantity,
+    this.comboId, {
+    this.itemId = 0,
+    this.cumulative = false,
+  });
+  final String sender, name, comboId;
+  final int itemId, quantity;
+  final bool cumulative;
+
+  String get description =>
+      '$sender 赠送 ${name.isEmpty ? '礼物 #$itemId' : name} ×$quantity';
+
+  LiveGiftMessage withName(String value) => LiveGiftMessage(
+    sender,
+    value,
+    quantity,
+    comboId,
+    itemId: itemId,
+    cumulative: cumulative,
+  );
+
+  LiveGiftMessage mergeCombo(LiveGiftMessage next) => LiveGiftMessage(
+    sender,
+    next.name.isEmpty ? name : next.name,
+    next.cumulative
+        ? (quantity >= next.quantity ? quantity : next.quantity)
+        : quantity + next.quantity,
+    comboId,
+    itemId: next.itemId > 0 ? next.itemId : itemId,
+    cumulative: next.cumulative,
+  );
 }
 
 class LiveSuperChatMessage {

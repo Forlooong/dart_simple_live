@@ -59,6 +59,7 @@ Widget buildFullControls(VideoState videoState, LiveRoomController controller) {
       children: [
         Container(),
         buildDanmuView(videoState, controller),
+        _buildGiftOverlay(controller),
 
         // 左下角SC显示
         Obx(
@@ -442,6 +443,7 @@ Widget buildControls(
     children: [
       Container(),
       buildDanmuView(videoState, controller),
+        _buildGiftOverlay(controller),
 
       // 左下角SC显示
       Obx(
@@ -637,6 +639,31 @@ Widget buildControls(
     ],
   );
 }
+
+Widget _buildGiftOverlay(LiveRoomController controller) => Positioned(
+  top: 12,
+  right: 12,
+  child: IgnorePointer(
+    child: Obx(() {
+      final gift = controller.giftOverlay.value;
+      if (gift == null || controller.showControlsState.value ||
+          !AppSettingsController.instance.showGifts.value) {
+        return const SizedBox.shrink();
+      }
+      return Container(
+        constraints: const BoxConstraints(maxWidth: 230),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.black87,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(gift.description, maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(color: Colors.white)),
+      );
+    }),
+  ),
+);
 
 Widget buildDanmuView(VideoState videoState, LiveRoomController controller) {
   var padding = MediaQuery.of(videoState.context).padding;

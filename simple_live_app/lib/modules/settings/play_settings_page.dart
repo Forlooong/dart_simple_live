@@ -21,6 +21,15 @@ class PlaySettingsPage extends GetView<AppSettingsController> {
       body: ListView(
         padding: AppStyle.edgeInsetsA12,
         children: [
+          SettingsCard(
+            child: Obx(() => SettingsSwitch(
+              title: '显示礼物',
+              subtitle: '在支持的直播间显示送礼消息和画面提示',
+              value: controller.showGifts.value,
+              onChanged: controller.setShowGifts,
+            )),
+          ),
+          const SizedBox(height: 12),
           Padding(
             padding: AppStyle.edgeInsetsA12.copyWith(top: 0),
             child: Text(

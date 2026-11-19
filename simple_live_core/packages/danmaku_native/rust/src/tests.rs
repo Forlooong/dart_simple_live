@@ -60,6 +60,27 @@ fn bilibili_multiple_packets_use_header_lengths() {
     assert_eq!(events(&result)[1].get("online").i64().unwrap(), 12345);
 }
 #[test]
+fn bilibili_gifts_are_decoded_and_bounded_without_dropping_chat() {
+    let valid = bili_chat(
+        r#"{"cmd":"SEND_GIFT","data":{"uname":"viewer","giftName":"flower","num":2,"batch_combo_id":"combo1"}}"#,
+    );
+    let invalid = bili_chat(r#"{"cmd":"SEND_GIFT","data":{"uname":"viewer","num":2}}"#);
+    let mut packets = invalid;
+    packets.extend(valid.repeat(60));
+    packets.extend(bili_chat(CHAT));
+    let result = decode(1, &packets);
+    let decoded = events(&result);
+    assert_eq!(decoded.len(), 51);
+    assert_eq!(decoded[0].get("type").i64().unwrap(), 1);
+    assert_eq!(decoded[0].get("count").i64().unwrap(), 2);
+    assert_eq!(
+        str_units(decoded[0].get("text")),
+        "flower".encode_utf16().collect::<Vec<_>>()
+    );
+    assert_eq!(decoded[50].get("type").i64().unwrap(), 0);
+}
+
+#[test]
 fn bilibili_zlib_brotli_and_nested_packets() {
     let inner = bili_chat(CHAT);
     let z = bili_packet(2, 5, &zlib(&inner));
@@ -182,6 +203,31 @@ fn douyu_bad_length_stops_payload_and_invalid_utf8_does_not_lose_next_packet() {
     assert_eq!(events(&result).len(), 1);
     assert_eq!(result.get("diagnostics").array().unwrap().len(), 1);
 }
+#[test]
+fn douyu_gift_count_and_id_are_independent_of_combo_hits() {
+    let mut data = encode_request(
+        "douyu",
+        "type@=dgb/nn@=观众@S一/gfid@=20001/gfcnt@=3/hits@=7/",
+    );
+    data.extend(encode_request(
+        "douyu",
+        "type@=dgb/nn@=观众/gfid@=20001/gfcnt@=-1/",
+    ));
+    data.extend(encode_request(
+        "douyu",
+        "type@=chatmsg/dms@=1/nn@=观众/txt@=ok/",
+    ));
+    let result = decode(2, &data);
+    let decoded = events(&result);
+    assert_eq!(decoded.len(), 2);
+    assert_eq!(decoded[0].get("item").i64().unwrap(), 20001);
+    assert_eq!(decoded[0].get("count").i64().unwrap(), 3);
+    assert_eq!(
+        str_units(decoded[0].get("user")),
+        "观众/一".encode_utf16().collect::<Vec<_>>()
+    );
+    assert_eq!(decoded[1].get("type").i64().unwrap(), 0);
+}
 fn huya_frame(uri: i64, body: &[u8]) -> Vec<u8> {
     let mut push = Vec::new();
     tars::write_integer(&mut push, 0, 0);
@@ -192,6 +238,55 @@ fn huya_frame(uri: i64, body: &[u8]) -> Vec<u8> {
     tars::write_bytes(&mut command, 1, &push);
     command
 }
+#[test]
+fn huya_gift_can_arrive_in_a_single_or_batched_push() {
+    let mut gift = Vec::new();
+    tars::write_integer(&mut gift, 0, 20206);
+    tars::write_string(&mut gift, 1, b"order");
+    tars::write_integer(&mut gift, 2, 3);
+    tars::write_string(&mut gift, 6, "观众".as_bytes());
+    tars::write_string(&mut gift, 20, "荧光棒".as_bytes());
+    let mut push = Vec::new();
+    tars::write_string(&mut push, 0, b"live:123");
+    push.extend([0x19, 0x00, 2, 0x0a]);
+    tars::write_integer(&mut push, 0, 6501);
+    push.push(0x0b); // Malformed item skipped without discarding the next one.
+    push.push(0x0a);
+    tars::write_integer(&mut push, 0, 6501);
+    tars::write_bytes(&mut push, 1, &gift);
+    push.push(0x0b);
+    let mut batched = Vec::new();
+    tars::write_integer(&mut batched, 0, 22);
+    tars::write_bytes(&mut batched, 1, &push);
+    for frame in [huya_frame(6501, &gift), batched] {
+        let result = decode(3, &frame);
+        let decoded = events(&result);
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].get("item").i64().unwrap(), 20206);
+        assert_eq!(decoded[0].get("count").i64().unwrap(), 3);
+        assert_eq!(
+            str_units(decoded[0].get("text")),
+            "荧光棒".encode_utf16().collect::<Vec<_>>()
+        );
+        assert!(str_units(decoded[0].get("combo")).is_empty());
+    }
+}
+
+#[test]
+fn huya_registers_the_live_group_separately_from_legacy_chat() {
+    let result = protocols::encode(&map([
+        ("v", int(1)),
+        ("kind", Value::Text("huya_live_group".into())),
+        ("uid", int(123)),
+    ]))
+    .unwrap();
+    let command = tars::parse(result.get("wire").bytes().unwrap()).unwrap();
+    assert_eq!(tars::integer(&command, 0), Some(16));
+    let registration = tars::parse(tars::bytes(&command, 1).unwrap()).unwrap();
+    let groups = tars::list(&registration, 0);
+    assert!(matches!(groups, [tars::Field::String(value)] if *value == b"live:123"));
+}
+
 #[test]
 fn huya_unknown_tars_fields_and_chat_online() {
     let mut body = vec![0x0a];
@@ -276,6 +371,56 @@ fn douyin_response() -> protocols::Response {
         ],
     }
 }
+#[test]
+fn douyin_gift_preserves_cumulative_combo_and_survives_a_bad_sibling() {
+    use protocols::{Envelope, GiftDetails, GiftMessage, PushFrame, User};
+    let mut response = douyin_response();
+    response.messages.push(
+        Envelope {
+            method: b"WebcastGiftMessage".to_vec(),
+            payload: vec![0xff],
+        }
+        .encode_to_vec(),
+    );
+    response.messages.push(
+        Envelope {
+            method: b"WebcastGiftMessage".to_vec(),
+            payload: GiftMessage {
+                gift_id: 7,
+                repeat_count: 5,
+                combo_count: 4,
+                group_id: 1234,
+                user: User {
+                    nick_name: "观众".as_bytes().to_vec(),
+                }
+                .encode_to_vec(),
+                gift: GiftDetails {
+                    id: 7,
+                    name: "鲜花".as_bytes().to_vec(),
+                }
+                .encode_to_vec(),
+                ..Default::default()
+            }
+            .encode_to_vec(),
+        }
+        .encode_to_vec(),
+    );
+    let frame = PushFrame {
+        payload: gzip(&response.encode_to_vec()),
+        ..Default::default()
+    };
+    let result = decode(4, &frame.encode_to_vec());
+    let decoded = events(&result);
+    assert_eq!(decoded.len(), 3);
+    assert_eq!(decoded[2].get("count").i64().unwrap(), 5);
+    assert_eq!(decoded[2].get("total").bool().unwrap(), true);
+    assert_eq!(
+        str_units(decoded[2].get("combo")),
+        "1234:7".encode_utf16().collect::<Vec<_>>()
+    );
+    assert_eq!(result.get("acks").array().unwrap().len(), 1);
+}
+
 #[test]
 fn douyin_ack_retains_uint64_and_internal_ext_before_bad_chat() {
     let response = douyin_response();

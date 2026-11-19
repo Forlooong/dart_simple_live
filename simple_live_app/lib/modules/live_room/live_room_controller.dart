@@ -62,6 +62,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   final ChatMessageBuffer _chatBuffer = ChatMessageBuffer();
   Timer? _messageFlushTimer;
   Worker? _danmakuVisibilityWorker;
+  Worker? _giftVisibilityWorker;
+  final giftOverlay = Rxn<LiveGiftMessage>();
+  Timer? _giftTimer;
   Worker? _filterRulesWorker;
   bool _filterUpdating = false;
   int _filterRevision = 0;
@@ -214,6 +217,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
     scrollController.addListener(scrollListener);
 
+    _giftVisibilityWorker = ever<bool>(AppSettingsController.instance.showGifts, (enabled) {
+      if (!enabled) _clearGiftOverlay();
+    });
     super.onInit();
   }
 
@@ -319,6 +325,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   }
 
   void _invalidateMessageBatch({bool clearHistory = false}) {
+    _clearGiftOverlay();
     ++_filterRevision;
     _filterUpdating = false;
     _messageFlushTimer?.cancel();
@@ -485,9 +492,34 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     } else if (msg.type == LiveMessageType.online) {
       _pendingOnline = msg.data;
       _scheduleMessageFlush();
+    } else if (msg.type == LiveMessageType.gift && msg.data is LiveGiftMessage) {
+      if (AppSettingsController.instance.showGifts.value) {
+        _queueChat(msg, overlay: false);
+        _showGift(msg.data as LiveGiftMessage);
+      }
     } else if (msg.type == LiveMessageType.superChat) {
       _queueSuperChat(msg.data as LiveSuperChatMessage);
     }
+  }
+
+  void _showGift(LiveGiftMessage gift) {
+    final previous = giftOverlay.value;
+    if (previous == null) {
+      giftOverlay.value = gift;
+      _giftTimer = Timer(const Duration(seconds: 3), _clearGiftOverlay);
+    } else if (gift.comboId.isNotEmpty &&
+        gift.comboId == previous.comboId &&
+        gift.sender == previous.sender &&
+        (gift.itemId > 0 && gift.itemId == previous.itemId ||
+            gift.name == previous.name)) {
+      giftOverlay.value = previous.mergeCombo(gift);
+    }
+  }
+
+  void _clearGiftOverlay() {
+    _giftTimer?.cancel();
+    _giftTimer = null;
+    giftOverlay.value = null;
   }
 
   int _superChatBytes(LiveSuperChatMessage message) =>
@@ -1620,6 +1652,7 @@ $errorStack''');
     danmakuForeground.value = false;
     _invalidateMessageBatch(clearHistory: true);
     _danmakuVisibilityWorker?.dispose();
+    _giftVisibilityWorker?.dispose();
     _filterRulesWorker?.dispose();
     if (_watchRegistered && Get.isRegistered<FollowService>()) {
       FollowService.instance.endWatching();

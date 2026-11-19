@@ -6,6 +6,7 @@ pub enum Field<'a> {
     String(&'a [u8]),
     Bytes(&'a [u8]),
     Struct(Vec<(u8, Field<'a>)>),
+    List(Vec<Field<'a>>),
     Other,
 }
 type Fields<'a> = Vec<(u8, Field<'a>)>;
@@ -119,11 +120,12 @@ impl<'a> Reader<'a> {
             }
             9 => {
                 let n = self.count()?;
+                let mut items = Vec::new();
                 for _ in 0..n {
                     let (_, kind) = self.head()?;
-                    self.field(kind, depth + 1)?;
+                    items.push(self.field(kind, depth + 1)?);
                 }
-                Field::Other
+                Field::List(items)
             }
             10 => Field::Struct(self.fields(depth + 1, true)?),
             13 => {
@@ -157,6 +159,12 @@ pub fn structure<'a, 'b>(fields: &'b [(u8, Field<'a>)], tag: u8) -> Result<&'b [
     match get(fields, tag) {
         Some(Field::Struct(s)) => Ok(s),
         _ => Err(Error::malformed("missing TARS struct field")),
+    }
+}
+pub fn list<'a, 'b>(fields: &'b [(u8, Field<'a>)], tag: u8) -> &'b [Field<'a>] {
+    match get(fields, tag) {
+        Some(Field::List(items)) => items,
+        _ => &[],
     }
 }
 pub fn string(fields: &[(u8, Field<'_>)], tag: u8) -> Result<Vec<u16>> {
@@ -203,6 +211,13 @@ pub fn write_string(out: &mut Vec<u8>, tag: u8, s: &[u8]) {
         out.extend((s.len() as u32).to_be_bytes());
     }
     out.extend(s);
+}
+pub fn write_strings(out: &mut Vec<u8>, tag: u8, values: &[&[u8]]) {
+    head(out, tag, 9);
+    write_integer(out, 0, values.len() as i64);
+    for value in values {
+        write_string(out, 0, value);
+    }
 }
 pub fn write_bytes(out: &mut Vec<u8>, tag: u8, b: &[u8]) {
     head(out, tag, 13);

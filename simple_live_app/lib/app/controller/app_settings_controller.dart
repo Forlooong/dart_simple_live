@@ -50,6 +50,7 @@ class AppSettingsController extends GetxController {
         .getValue(LocalStorageService.kDanmuArea, 0.8);
     danmuSpeed.value = LocalStorageService.instance
         .getValue(LocalStorageService.kDanmuSpeed, 10.0);
+    showGifts.value = LocalStorageService.instance.getValue<bool>('ShowLiveGifts', false);
     danmuEnable.value = LocalStorageService.instance
         .getValue(LocalStorageService.kDanmuEnable, true);
     danmuStrokeWidth.value = LocalStorageService.instance
@@ -290,6 +291,13 @@ class AppSettingsController extends GetxController {
   void setDanmuOpacity(double e) {
     danmuOpacity.value = e;
     LocalStorageService.instance.setValue(LocalStorageService.kDanmuOpacity, e);
+  }
+
+  final showGifts = false.obs;
+
+  Future<void> setShowGifts(bool value) async {
+    await LocalStorageService.instance.setValue('ShowLiveGifts', value);
+    showGifts.value = value;
   }
 
   var danmuEnable = true.obs;

@@ -12,6 +12,7 @@ pub struct Batch {
     pub acks: Vec<Value>,
     pub diagnostics: Vec<Value>,
     pub fatal: bool,
+    gift_count: usize,
     decompressed: usize,
     output_size: usize,
 }
@@ -32,6 +33,34 @@ impl Batch {
         self.events.push(event);
         Ok(())
     }
+    fn gift(
+        &mut self,
+        sender: &[u16],
+        name: &[u16],
+        item_id: i64,
+        count: i64,
+        combo: &[u16],
+        cumulative: bool,
+    ) -> Result<()> {
+        if self.gift_count >= 50
+            || sender.is_empty()
+            || (name.is_empty() && item_id <= 0)
+            || !(1..=1_000_000).contains(&count)
+        {
+            return Ok(());
+        }
+        self.gift_count += 1;
+        self.event(wire::map([
+            ("type", wire::int(1)),
+            ("user", wire::units(&sender[..sender.len().min(128)])),
+            ("text", wire::units(&name[..name.len().min(128)])),
+            ("item", wire::int(item_id)),
+            ("count", wire::int(count)),
+            ("combo", wire::units(&combo[..combo.len().min(128)])),
+            ("total", Value::Bool(cumulative)),
+        ]))
+    }
+
     pub fn value(self) -> Value {
         wire::map([
             ("v", wire::int(1)),
@@ -162,6 +191,20 @@ fn bili_json(input: &[u8], out: &mut Batch) -> Result<()> {
             &text.string(),
             legacy_color(info.at(0).at(3).integer().unwrap_or(0)),
         ))?;
+    } else if command.eq("SEND_GIFT") {
+        let data = object.get("data");
+        let field = |key| match data.get(key) {
+            json::Json::String(value) => value.as_slice(),
+            _ => &[],
+        };
+        out.gift(
+            field("uname"),
+            field("giftName"),
+            data.get("giftId").integer().unwrap_or(0),
+            data.get("num").integer().unwrap_or(0),
+            field("batch_combo_id"),
+            false,
+        )?;
     } else if command.eq("SUPER_CHAT_MESSAGE") {
         let data = object.get("data");
         if data.is_null() {
@@ -252,6 +295,18 @@ fn douyu_text(body: &[u8], out: &mut Batch) -> Result<()> {
         };
         fields.insert(key, stt_unescape(value));
     }
+    if fields.get("type").map(String::as_str) == Some("dgb") {
+        let text = |key: &str| fields.get(key).map(String::as_str).unwrap_or("");
+        let id = text("gfid").parse().unwrap_or(0);
+        let count = fields
+            .get("gfcnt")
+            .map_or(1, |value| value.parse().unwrap_or(0));
+        let name = match text("gfn") {
+            "" => text("gn"),
+            name => name,
+        };
+        return out.gift(&utf16(text("nn")), &utf16(name), id, count, &[], false);
+    }
     if fields.get("type").map(String::as_str) != Some("chatmsg") || !fields.contains_key("dms") {
         return Ok(());
     }
@@ -299,15 +354,40 @@ fn stt_unescape(input: &str) -> String {
 
 fn huya(input: &[u8], out: &mut Batch) -> Result<()> {
     let command = tars::parse(input)?;
-    if tars::integer(&command, 0).unwrap_or(0) != 7 {
+    let kind = tars::integer(&command, 0).unwrap_or(0);
+    if !matches!(kind, 7 | 22) {
         return Ok(());
     }
     let push = tars::parse(tars::bytes(&command, 1)?)?;
-    let uri = tars::integer(&push, 1).unwrap_or(0);
-    if !matches!(uri, 1400 | 8006) {
+    if kind == 7 {
+        huya_push(&push, 1, 2, out)?;
+    } else {
+        for item in tars::list(&push, 1) {
+            if let tars::Field::Struct(fields) = item {
+                huya_push(fields, 0, 1, out)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn huya_push(
+    fields: &[(u8, tars::Field<'_>)],
+    uri_tag: u8,
+    payload_tag: u8,
+    out: &mut Batch,
+) -> Result<()> {
+    let uri = tars::integer(fields, uri_tag).unwrap_or(0);
+    if !matches!(uri, 1400 | 6501 | 8006) {
         return Ok(());
     }
-    let payload = tars::bytes(&push, 2)?;
+    let payload = match tars::bytes(fields, payload_tag) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            out.diagnostic(error.message);
+            return Ok(());
+        }
+    };
     if let Err(error) = huya_message(uri, payload, out) {
         if error.code == 2 {
             return Err(error);
@@ -328,6 +408,17 @@ fn huya_message(uri: i64, payload: &[u8], out: &mut Batch) -> Result<()> {
             let text = tars::string(&fields, 3)?;
             let color = legacy_color(tars::integer(format, 0).unwrap_or(0));
             out.event(chat(&name, &text, color))?;
+        }
+        6501 => {
+            // SendItemSubBroadcastPacket. Tag 1 is an order ID, not a combo.
+            out.gift(
+                &tars::string(&fields, 6)?,
+                &tars::string(&fields, 20)?,
+                tars::integer(&fields, 0).unwrap_or(0),
+                tars::integer(&fields, 2).unwrap_or(1),
+                &[],
+                false,
+            )?;
         }
         8006 => {
             out.event(online(tars::integer(&fields, 0).unwrap_or(0)))?;
@@ -389,6 +480,70 @@ pub struct RoomUserSeqMessage {
     #[prost(int64, tag = "7")]
     pub total_user: i64,
 }
+#[derive(Clone, PartialEq, Message)]
+pub struct GiftMessage {
+    #[prost(uint64, tag = "2")]
+    pub gift_id: u64,
+    #[prost(uint64, tag = "4")]
+    pub group_count: u64,
+    #[prost(uint64, tag = "5")]
+    pub repeat_count: u64,
+    #[prost(uint64, tag = "6")]
+    pub combo_count: u64,
+    #[prost(bytes = "vec", tag = "7")]
+    pub user: Vec<u8>,
+    #[prost(uint64, tag = "11")]
+    pub group_id: u64,
+    #[prost(bytes = "vec", tag = "15")]
+    pub gift: Vec<u8>,
+    #[prost(uint64, tag = "29")]
+    pub total_count: u64,
+}
+#[derive(Clone, PartialEq, Message)]
+pub struct GiftDetails {
+    #[prost(uint64, tag = "5")]
+    pub id: u64,
+    #[prost(bytes = "vec", tag = "16")]
+    pub name: Vec<u8>,
+}
+fn douyin_gift(payload: &[u8], out: &mut Batch) -> Result<()> {
+    crate::protobuf::validate(payload)?;
+    let message =
+        GiftMessage::decode(payload).map_err(|_| Error::malformed("invalid Douyin gift"))?;
+    crate::protobuf::validate(&message.user)?;
+    crate::protobuf::validate(&message.gift)?;
+    let user = User::decode(message.user.as_slice())
+        .map_err(|_| Error::malformed("invalid Douyin gift sender"))?;
+    let gift = GiftDetails::decode(message.gift.as_slice())
+        .map_err(|_| Error::malformed("invalid Douyin gift details"))?;
+    let sender = std::str::from_utf8(&user.nick_name)
+        .map_err(|_| Error::malformed("invalid Douyin gift sender UTF-8"))?;
+    let name = std::str::from_utf8(&gift.name)
+        .map_err(|_| Error::malformed("invalid Douyin gift name UTF-8"))?;
+    let item_id = i64::try_from(message.gift_id.max(gift.id)).unwrap_or(0);
+    let count = i64::try_from(
+        message
+            .total_count
+            .max(message.repeat_count)
+            .max(message.combo_count)
+            .max(message.group_count)
+            .max(1),
+    )
+    .unwrap_or(0);
+    let combo = if message.group_id == 0 {
+        Vec::new()
+    } else {
+        utf16(&format!("{}:{item_id}", message.group_id))
+    };
+    out.gift(
+        &utf16(sender),
+        &utf16(name),
+        item_id,
+        count,
+        &combo,
+        !combo.is_empty(),
+    )
+}
 fn douyin(input: &[u8], out: &mut Batch) -> Result<()> {
     crate::protobuf::validate(input)?;
     let frame =
@@ -447,6 +602,7 @@ fn douyin_message(bytes: Vec<u8>, out: &mut Batch) -> Result<()> {
                 .map_err(|_| Error::malformed("invalid Douyin chat UTF-8"))?;
             out.event(chat(&utf16(name), &utf16(text), 0xffffff))?;
         }
+        b"WebcastGiftMessage" => douyin_gift(&envelope.payload, out)?,
         b"WebcastRoomUserSeqMessage" => {
             crate::protobuf::validate(&envelope.payload)?;
             let message = RoomUserSeqMessage::decode(envelope.payload.as_slice())
@@ -490,6 +646,17 @@ pub fn encode(request: &Value) -> Result<Value> {
             out.extend(operation.to_be_bytes());
             out.extend(1u32.to_be_bytes());
             out.extend(body);
+            out
+        }
+        "huya_live_group" => {
+            let uid = request.get("uid").i64()?;
+            let group = format!("live:{uid}");
+            let mut body = Vec::new();
+            tars::write_strings(&mut body, 0, &[group.as_bytes()]);
+            tars::write_string(&mut body, 1, b"");
+            let mut out = Vec::new();
+            tars::write_integer(&mut out, 0, 16);
+            tars::write_bytes(&mut out, 1, &body);
             out
         }
         "huya_join" => {

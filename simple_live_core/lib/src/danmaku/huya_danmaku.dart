@@ -6,10 +6,12 @@ class HuyaDanmakuArgs {
   final int ayyuid;
   final int topSid;
   final int subSid;
+  final int presenterUid;
   HuyaDanmakuArgs({
     required this.ayyuid,
     required this.topSid,
     required this.subSid,
+    this.presenterUid = 0,
   });
   @override
   String toString() {
@@ -63,6 +65,12 @@ class HuyaDanmaku extends NativeLiveDanmaku {
       'top': danmakuArgs.topSid,
       'sub': danmakuArgs.subSid,
     });
+    if (danmakuArgs.presenterUid > 0) {
+      encodeAndSend({
+        'kind': 'huya_live_group',
+        'uid': danmakuArgs.presenterUid,
+      });
+    }
   }
 
   @override

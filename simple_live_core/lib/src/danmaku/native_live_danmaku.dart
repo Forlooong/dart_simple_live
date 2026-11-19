@@ -25,6 +25,8 @@ abstract class NativeLiveDanmaku extends LiveDanmaku {
 
   bool get nativeActive => !_closed;
 
+  LiveGiftMessage resolveGift(LiveGiftMessage gift) => gift;
+
   void sendWire(List<int> wire) => webScoketUtils?.sendMessage(wire);
   void reconnectNative() => webScoketUtils?.restartAfterProtocolError();
 
@@ -189,7 +191,7 @@ abstract class NativeLiveDanmaku extends LiveDanmaku {
   }
 
   bool _boundEvents() {
-    var count = 0, bytes = 0, controls = 0, controlCount = 0;
+    var count = 0, bytes = 0, controls = 0, controlCount = 0, gifts = 0;
     final retained = <_Event>[];
     for (final event in _events.toList().reversed) {
       if (event.chat) {
@@ -198,6 +200,8 @@ abstract class NativeLiveDanmaku extends LiveDanmaku {
           continue;
         }
         bytes += event.bytes;
+      } else if (event.gift) {
+        if (++gifts > 50) continue;
       } else {
         controls += event.bytes;
         controlCount++;
@@ -359,7 +363,7 @@ abstract class NativeLiveDanmaku extends LiveDanmaku {
           final accepted = !event.chat || keep[chatIndex++];
           if (_events.remove(event) && accepted) {
             try {
-              publish.add(_toMessage(event.data));
+              publish.add(_toMessage(event.data, resolveGift));
             } catch (error) {
               // One invalid SC timestamp or future payload extension must not
               // discard other messages already parsed from the same frame.
@@ -493,6 +497,7 @@ class _Event {
   _Event(this.data);
   final Map<String, dynamic> data;
   bool get chat => data['type'] == 0;
+  bool get gift => data['type'] == 1;
   int get bytes {
     int size(Object? value) {
       if (value is Uint8List) return value.length;
@@ -506,8 +511,30 @@ class _Event {
   }
 }
 
-LiveMessage _toMessage(Map<String, dynamic> event) {
+LiveMessage _toMessage(
+  Map<String, dynamic> event,
+  LiveGiftMessage Function(LiveGiftMessage) resolveGift,
+) {
   final type = event['type'] as int;
+  if (type == 1) {
+    final gift = resolveGift(
+      LiveGiftMessage(
+        utf16String(event['user']),
+        utf16String(event['text']),
+        event['count'] as int,
+        utf16String(event['combo']),
+        itemId: event['item'] as int? ?? 0,
+        cumulative: event['total'] == true,
+      ),
+    );
+    return LiveMessage(
+      type: LiveMessageType.gift,
+      userName: gift.sender,
+      message: gift.description,
+      color: LiveMessageColor.white,
+      data: gift,
+    );
+  }
   if (type == 2) {
     return LiveMessage(
       type: LiveMessageType.online,

@@ -516,6 +516,19 @@ class LiveRoomPage extends GetView<LiveRoomController> {
   }
 
   Widget buildMessageItem(LiveMessage message) {
+    if (message.type == LiveMessageType.gift) {
+      return Obx(() {
+        final settings = AppSettingsController.instance;
+        if (!settings.showGifts.value) return const SizedBox.shrink();
+        return Text(
+          message.message,
+          style: TextStyle(
+            fontSize: settings.chatTextSize.value,
+            color: Get.theme.colorScheme.primary,
+          ),
+        );
+      });
+    }
     if (message.userName == "LiveSysMessage") {
       return Obx(
         () => Text(
