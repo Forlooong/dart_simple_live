@@ -24,7 +24,12 @@ def sha(path):
         return hashlib.file_digest(source, 'sha256').hexdigest()
 
 
-def release_changes(root, head, previous):
+def release_changes(root, head, previous, tag):
+    notes_path = root / 'docs' / 'release-notes' / f'{tag}.txt'
+    if notes_path.is_file():
+        notes = notes_path.read_text(encoding='utf-8').strip()
+        require(notes, f'Empty release notes for {tag}')
+        return notes
     if not isinstance(previous, str) or not re.fullmatch(r'[0-9a-f]{40}', previous):
         return ''
     history = subprocess.run(
@@ -120,7 +125,7 @@ def main():
                     'Refusing to publish a version older than the latest release')
     output = args.output
     output.mkdir(parents=True, exist_ok=False)
-    changes = release_changes(root, actual, latest.get('target_commitish') if latest else None)
+    changes = release_changes(root, actual, latest.get('target_commitish') if latest else None, tag)
     manifest = {'schemaVersion': 1, 'repository': REPOSITORY, 'sourceSha': actual}
     for app, (name, build) in versions.items():
         manifest[app] = {'version': name, 'notes': changes, 'packages': []}
@@ -183,7 +188,8 @@ def main():
     (output / 'SHA256SUMS.txt').write_text(''.join(
         f'{sha(path)}  {path.name}\n' for path in sorted(output.iterdir()) if path.is_file()), encoding='utf-8')
     title = f'Simple Live {versions["main"][0]} / TV {versions["tv"][0]}'
-    notes = ((changes + '\n\n') if changes else '') + (
+    description = re.sub(r'^• ', '- ', changes, flags=re.M)
+    notes = ((description + '\n\n') if description else '') + (
         '- Android / TV 可使用相同签名的新版覆盖安装；桌面端下载对应安装包更新。\n'
         '- 本分支提供 Android、Android TV、Windows 和 Linux 安装包。\n\n'
         '基于 [Simple Live](https://github.com/xiaoyaocz/dart_simple_live)，'

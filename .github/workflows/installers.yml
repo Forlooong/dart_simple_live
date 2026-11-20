@@ -1,5 +1,5 @@
 name: Build installers
-run-name: "Build all platforms · Main 1.12.29+11130 · TV 1.7.19+10624 · #${{ github.run_number }}"
+run-name: "Build all platforms · Main 1.12.30+11131 · TV 1.7.20+10625 · #${{ github.run_number }}"
 
 on:
   push:

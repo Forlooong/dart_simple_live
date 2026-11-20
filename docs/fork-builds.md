@@ -16,6 +16,11 @@ after reviewing the packages, licenses and source. Publication creates a draft,
 uploads all files, and then makes it the latest release. An existing release/tag
 is never overwritten; failed uploads leave a draft for investigation.
 
+For reviewed in-app update details, add UTF-8 plain text to
+`docs/release-notes/<release-tag>.txt` in the commit used to build the installers.
+The publisher uses that text for the main app, TV and the GitHub release page.
+Versions without a matching file use the commit titles from the release range.
+
 If master has advanced beyond the built commit, keep a branch pointing directly
 to that exact source SHA before publishing (for example, `codex/release-<version>`).
 GitHub can otherwise reject release creation for historical commits that modify

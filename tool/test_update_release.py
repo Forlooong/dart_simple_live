@@ -4,10 +4,32 @@ import base64
 import unittest
 from pathlib import Path
 import tempfile
-from prepare_update_release import JOBS, TARGETS, validate_run, verify_uploaded, sha, minimum_sdk, release_body
+from subprocess import CompletedProcess
+from unittest.mock import patch
+from prepare_update_release import (
+    JOBS, TARGETS, minimum_sdk, release_body, release_changes, sha,
+    validate_run, verify_uploaded,
+)
 
 
 class UpdateReleaseTest(unittest.TestCase):
+    def test_prefers_reviewed_notes_for_exact_version_and_falls_back_to_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            notes_dir = root / 'docs' / 'release-notes'
+            notes_dir.mkdir(parents=True)
+            tag = 'fork-main-1.12.30-build11131-tv-1.7.20-build10625'
+            notes = '抖音搜索\n• 支持按关键词查找主播。'
+            (notes_dir / f'{tag}.txt').write_text(notes + '\n', encoding='utf-8')
+            history = CompletedProcess([], 0, stdout='fix: older title\n')
+            with patch('prepare_update_release.subprocess.run', return_value=history) as git:
+                self.assertEqual(release_changes(root, 'a' * 40, 'b' * 40, tag), notes)
+                git.assert_not_called()
+                self.assertEqual(
+                    release_changes(root, 'a' * 40, 'b' * 40, 'another-tag'),
+                    '- fix: older title',
+                )
+
     def test_release_body_embeds_exact_manifest_bytes(self):
         data = '{"notes":"更新详情"}\n'.encode('utf-8')
         notes, blank, marker, encoded, end = release_body('版本说明', data).splitlines()
