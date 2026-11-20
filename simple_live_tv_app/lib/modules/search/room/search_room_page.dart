@@ -12,6 +12,7 @@ import 'package:simple_live_tv_app/widgets/button/highlight_button.dart';
 import 'package:simple_live_tv_app/widgets/card/live_room_card.dart';
 import 'package:simple_live_tv_app/widgets/status/app_empty_widget.dart';
 import 'package:simple_live_tv_app/widgets/status/app_error_widget.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class SearchRoomPage extends GetView<SearchRoomController> {
   const SearchRoomPage({super.key});
@@ -78,11 +79,7 @@ class SearchRoomPage extends GetView<SearchRoomController> {
                 .map(
                   (e) => Obx(
                     () => HighlightButton(
-                      icon: Image.asset(
-                        e.logo,
-                        width: 48.w,
-                        height: 48.w,
-                      ),
+                      icon: Image.asset(e.logo, width: 48.w, height: 48.w),
                       text: e.name,
                       selected: controller.siteId.value == e.id,
                       focusNode: AppFocusNode(),
@@ -124,17 +121,28 @@ class SearchRoomPage extends GetView<SearchRoomController> {
                         roomId: item.roomId,
                         online: item.online,
                         onTap: () {
-                          AppNavigator.toLiveRoomDetail(
-                            site: controller.site,
-                            roomId: item.roomId,
-                          );
+                          if (item.roomId.isNotEmpty) {
+                            AppNavigator.toLiveRoomDetail(
+                              site: controller.site,
+                              roomId: item.roomId,
+                            );
+                            return;
+                          }
+                          final profile = item.profile;
+                          if (profile != null) {
+                            launchUrl(
+                              profile,
+                              mode: LaunchMode.externalApplication,
+                            );
+                          }
                         },
                       );
                     },
                   ),
                   Obx(
                     () => Visibility(
-                      visible: controller.list.isEmpty &&
+                      visible:
+                          controller.list.isEmpty &&
                           !controller.loadding.value &&
                           !controller.pageError.value,
                       child: AppEmptyWidget(
@@ -146,10 +154,14 @@ class SearchRoomPage extends GetView<SearchRoomController> {
                   ),
                   Obx(
                     () => Visibility(
-                      visible: controller.pageError.value &&
+                      visible:
+                          controller.pageError.value &&
                           !controller.loadding.value,
                       child: AppErrorWidget(
                         errorMsg: controller.errorMsg.value,
+                        onRefresh: () {
+                          controller.refreshData();
+                        },
                       ),
                     ),
                   ),

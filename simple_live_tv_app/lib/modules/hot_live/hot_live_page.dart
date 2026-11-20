@@ -10,6 +10,8 @@ import 'package:simple_live_tv_app/routes/app_navigation.dart';
 import 'package:simple_live_tv_app/widgets/app_scaffold.dart';
 import 'package:simple_live_tv_app/widgets/button/highlight_button.dart';
 import 'package:simple_live_tv_app/widgets/card/live_room_card.dart';
+import 'package:simple_live_tv_app/widgets/status/app_empty_widget.dart';
+import 'package:simple_live_tv_app/widgets/status/app_error_widget.dart';
 
 class HotLivePage extends GetView<HotliveController> {
   const HotLivePage({super.key});
@@ -76,11 +78,7 @@ class HotLivePage extends GetView<HotliveController> {
                 .map(
                   (e) => Obx(
                     () => HighlightButton(
-                      icon: Image.asset(
-                        e.logo,
-                        width: 48.w,
-                        height: 48.w,
-                      ),
+                      icon: Image.asset(e.logo, width: 48.w, height: 48.w),
                       text: e.name,
                       selected: controller.siteId.value == e.id,
                       focusNode: AppFocusNode(),
@@ -95,38 +93,68 @@ class HotLivePage extends GetView<HotliveController> {
           AppStyle.vGap24,
           Expanded(
             child: Obx(
-              () => MasonryGridView.count(
-                padding: AppStyle.edgeInsetsA48,
-                itemCount: controller.list.length,
-                crossAxisCount: 5,
-                crossAxisSpacing: 48.w,
-                mainAxisSpacing: 40.w,
-                controller: controller.scrollController,
-                itemBuilder: (_, i) {
-                  var item = controller.list[i];
+              () => Stack(
+                children: [
+                  MasonryGridView.count(
+                    padding: AppStyle.edgeInsetsA48,
+                    itemCount: controller.list.length,
+                    crossAxisCount: 5,
+                    crossAxisSpacing: 48.w,
+                    mainAxisSpacing: 40.w,
+                    controller: controller.scrollController,
+                    itemBuilder: (_, i) {
+                      var item = controller.list[i];
 
-                  if (i == 0) {
-                    Future.delayed(Duration.zero, () {
-                      if (controller.currentPage == 2) {
-                        item.focusNode.requestFocus();
+                      if (i == 0) {
+                        Future.delayed(Duration.zero, () {
+                          if (controller.currentPage == 2) {
+                            item.focusNode.requestFocus();
+                          }
+                        });
                       }
-                    });
-                  }
-                  return LiveRoomCard(
-                    cover: item.cover,
-                    anchor: item.userName,
-                    title: item.title,
-                    focusNode: item.focusNode,
-                    roomId: item.roomId,
-                    online: item.online,
-                    onTap: () {
-                      AppNavigator.toLiveRoomDetail(
-                        site: controller.site,
+                      return LiveRoomCard(
+                        cover: item.cover,
+                        anchor: item.userName,
+                        title: item.title,
+                        focusNode: item.focusNode,
                         roomId: item.roomId,
+                        online: item.online,
+                        onTap: () {
+                          AppNavigator.toLiveRoomDetail(
+                            site: controller.site,
+                            roomId: item.roomId,
+                          );
+                        },
                       );
                     },
-                  );
-                },
+                  ),
+                  Obx(
+                    () => Visibility(
+                      visible:
+                          controller.list.isEmpty &&
+                          !controller.loadding.value &&
+                          !controller.pageError.value,
+                      child: AppEmptyWidget(
+                        onRefresh: () {
+                          controller.refreshData();
+                        },
+                      ),
+                    ),
+                  ),
+                  Obx(
+                    () => Visibility(
+                      visible:
+                          controller.pageError.value &&
+                          !controller.loadding.value,
+                      child: AppErrorWidget(
+                        errorMsg: controller.errorMsg.value,
+                        onRefresh: () {
+                          controller.refreshData();
+                        },
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),

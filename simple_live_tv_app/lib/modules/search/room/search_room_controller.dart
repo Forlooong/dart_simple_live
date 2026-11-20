@@ -36,13 +36,18 @@ class SearchRoomController extends BasePageController<LiveRoomItemExt> {
     var result = await site.liveSite.searchRooms(keyword, page: page);
 
     return result.items
-        .map((e) => LiveRoomItemExt(
-              roomId: e.roomId,
-              title: e.title,
-              cover: e.cover,
-              userName: e.userName,
-              online: e.online,
-            ))
+        .map(
+          (e) => LiveRoomItemExt(
+            roomId: e.roomId,
+            title: e.title.isEmpty ? e.userName : e.title,
+            cover: e.cover,
+            userName: e.userName,
+            online: e.online,
+            onlineKnown: e.onlineKnown,
+            profile: e.profile,
+            liveStatus: e.liveStatus,
+          ),
+        )
         .toList();
   }
 

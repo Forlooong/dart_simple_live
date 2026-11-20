@@ -35,13 +35,16 @@ class HotliveController extends BasePageController<LiveRoomItemExt> {
     var result = await site.liveSite.getRecommendRooms(page: page);
 
     return result.items
-        .map((e) => LiveRoomItemExt(
-              roomId: e.roomId,
-              title: e.title,
-              cover: e.cover,
-              userName: e.userName,
-              online: e.online,
-            ))
+        .map(
+          (e) => LiveRoomItemExt(
+            roomId: e.roomId,
+            title: e.title,
+            cover: e.cover,
+            userName: e.userName,
+            online: e.online,
+            onlineKnown: e.onlineKnown,
+          ),
+        )
         .toList();
   }
 
@@ -59,6 +62,9 @@ class LiveRoomItemExt extends LiveRoomItem {
     required super.cover,
     required super.userName,
     super.online = 0,
+    super.onlineKnown,
+    super.profile,
+    super.liveStatus,
   });
 
   AppFocusNode focusNode = AppFocusNode();

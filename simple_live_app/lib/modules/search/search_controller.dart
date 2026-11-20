@@ -50,7 +50,9 @@ class AppSearchController extends GetxController
           author: author,
           title: null,
           live: Sites.allSites[site]?.liveSite.peekRoomStatus(room)?.live,
+          profile: null,
           source: source,
+          accountId: null,
         );
       }
     }

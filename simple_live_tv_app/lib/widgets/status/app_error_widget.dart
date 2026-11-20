@@ -1,13 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
+import 'package:simple_live_tv_app/app/app_focus_node.dart';
 import 'package:simple_live_tv_app/app/app_style.dart';
+import 'package:simple_live_tv_app/widgets/button/highlight_button.dart';
 import 'package:lottie/lottie.dart';
 
 class AppErrorWidget extends StatelessWidget {
   final Function()? onRefresh;
   final String errorMsg;
   const AppErrorWidget({this.errorMsg = "", this.onRefresh, Key? key})
-      : super(key: key);
+    : super(key: key);
 
   @override
   Widget build(BuildContext context) {
@@ -28,6 +30,15 @@ class AppErrorWidget extends StatelessWidget {
               textAlign: TextAlign.center,
               style: AppStyle.textStyleWhite,
             ),
+            if (onRefresh != null) ...[
+              AppStyle.vGap24,
+              HighlightButton(
+                text: "重试",
+                iconData: Icons.refresh,
+                onTap: onRefresh,
+                focusNode: AppFocusNode(),
+              ),
+            ],
           ],
         ),
       ),

@@ -6,8 +6,16 @@ typedef AggregateSearchResult = ({
   String author,
   String? title,
   bool? live,
+  Uri? profile,
   String? source,
+  String? accountId,
 });
+
+Uri douyinWebSearchUri(String keyword, {required bool anchors}) => Uri.https(
+  'www.douyin.com',
+  '/search/$keyword',
+  {'type': anchors ? 'user' : 'live'},
+);
 
 class PlatformSearchResults {
   final results = <String, AggregateSearchResult>{};
@@ -15,6 +23,7 @@ class PlatformSearchResults {
   bool hasMore = true;
   bool loading = false;
   CoreErrorKind? failure;
+  int? retryPage;
 }
 
 class AggregateSearch extends ChangeNotifier {
@@ -36,31 +45,8 @@ class AggregateSearch extends ChangeNotifier {
   bool active = false;
   bool _disposed = false;
 
-  bool supportsRemote(String id) => !anchors || id != 'douyin';
-
   bool _visible(String id) =>
       selectedPlatform == null || selectedPlatform == id;
-
-  void selectPlatform(String? id) {
-    if (selectedPlatform == id) return;
-    selectedPlatform = id;
-    for (final entry in _requests.entries.toList()) {
-      if (_visible(entry.key)) continue;
-      _requests.remove(entry.key);
-      entry.value.cancel();
-      platforms[entry.key]?.loading = false;
-    }
-    _start();
-    notifyListeners();
-  }
-
-  void _store(String id, AggregateSearchResult item) {
-    final roomId = item.roomId;
-    if (roomId.isEmpty || roomId == 'null') return;
-    final results = platforms[id]!.results;
-    if (!results.containsKey(roomId)) ordered.add((id, roomId));
-    results[roomId] = item;
-  }
 
   void reset(String value, {required bool searchAnchors}) {
     _cancel();
@@ -86,27 +72,77 @@ class AggregateSearch extends ChangeNotifier {
     }
   }
 
+  void selectPlatform(String? id) {
+    if (selectedPlatform == id) return;
+    selectedPlatform = id;
+    for (final entry in _requests.entries.toList()) {
+      if (_visible(entry.key)) continue;
+      _requests.remove(entry.key);
+      entry.value.cancel();
+      platforms[entry.key]?.loading = false;
+    }
+    _start();
+    notifyListeners();
+  }
+
+  void _store(String id, AggregateSearchResult item) {
+    final state = platforms[id]!;
+    if (item.roomId == 'null') return;
+    final key = item.roomId.isNotEmpty ? item.roomId : item.profile?.path;
+    if (key == null) return;
+    final roomMatch = state.results.containsKey(key)
+        ? key
+        : item.roomId.isEmpty
+        ? null
+        : state.results.entries
+              .where((entry) => entry.value.roomId == item.roomId)
+              .firstOrNull
+              ?.key;
+    final profileMatch = item.profile == null
+        ? null
+        : state.results.entries
+              .where(
+                (entry) =>
+                    entry.value.profile == item.profile &&
+                    (item.roomId.isEmpty || entry.value.roomId.isEmpty),
+              )
+              .firstOrNull
+              ?.key;
+    final target = roomMatch ?? profileMatch ?? key;
+    final previous = state.results[target];
+    if (profileMatch != null &&
+        profileMatch != target &&
+        state.results[profileMatch]!.roomId.isEmpty) {
+      state.results.remove(profileMatch);
+      ordered.remove((id, profileMatch));
+    }
+    if (previous == null) ordered.add((id, target));
+    state.results[target] = (
+      roomId: item.roomId.isEmpty ? previous?.roomId ?? '' : item.roomId,
+      author: item.author.isEmpty ? previous?.author ?? '' : item.author,
+      title: item.title ?? previous?.title,
+      live: item.live ?? previous?.live,
+      profile: item.profile ?? previous?.profile,
+      source: item.source,
+      accountId: item.accountId ?? previous?.accountId,
+    );
+  }
+
   void _start() {
     if (!active || keyword.isEmpty) return;
     for (final id in sites.keys) {
       final state = platforms[id];
-      if (!_visible(id) ||
-          state == null ||
-          state.nextPage != 1 ||
-          state.failure != null ||
-          state.loading) {
-        continue;
-      }
-      if (id == 'douyin' && state.results.isEmpty) {
-        for (final item
-            in localDouyinResults?.call(keyword) ??
-                const <AggregateSearchResult>[]) {
-          _store(id, item);
+      if (_visible(id) && state?.nextPage == 1 && state?.failure == null) {
+        if (id == 'douyin' && state!.results.isEmpty) {
+          for (final item
+              in localDouyinResults?.call(keyword) ??
+                  const <AggregateSearchResult>[]) {
+            _store(id, item);
+          }
         }
+        load(id);
       }
-      if (supportsRemote(id)) load(id);
     }
-    notifyListeners();
   }
 
   void _cancel() {
@@ -117,7 +153,7 @@ class AggregateSearch extends ChangeNotifier {
     _requests.clear();
   }
 
-  Future<void> load(String id) async {
+  Future<void> load(String id, {bool retry = false}) async {
     final state = platforms[id];
     final site = sites[id];
     if (_disposed ||
@@ -126,13 +162,19 @@ class AggregateSearch extends ChangeNotifier {
         state == null ||
         site == null ||
         !_visible(id) ||
-        !supportsRemote(id) ||
-        !state.hasMore ||
+        (!state.hasMore && !(retry && state.retryPage != null)) ||
         state.loading) {
       return;
     }
     final version = site.statusConfigurationVersion;
-    final block = _recovery.blocked(id, version);
+    final recoveryKey = id != 'douyin'
+        ? id
+        : anchors
+        ? 'douyin:anchors'
+        : DouyinSite.directSearchRoomId(keyword) != null
+        ? 'douyin:direct'
+        : 'douyin:rooms';
+    final block = _recovery.blocked(recoveryKey, version);
     if (block != null) {
       state.failure = block;
       notifyListeners();
@@ -145,11 +187,11 @@ class AggregateSearch extends ChangeNotifier {
     state.failure = null;
     notifyListeners();
     final term = keyword;
-    final page = state.nextPage;
+    final page = retry ? state.retryPage ?? state.nextPage : state.nextPage;
     final searchAnchors = anchors;
     bool current() => !_disposed && identical(_requests[id], context);
     try {
-      final (items, more) = await context
+      final (items, more, partial) = await context
           .run(() async {
             if (searchAnchors) {
               final result = await site.searchAnchors(term, page: page);
@@ -157,7 +199,9 @@ class AggregateSearch extends ChangeNotifier {
                 result.items.map<AggregateSearchResult>(
                   (item) => (
                     roomId: item.roomId,
+                    profile: item.profile,
                     source: null,
+                    accountId: item.accountId,
                     author: item.userName,
                     title: item.roomTitle,
                     live: item.statusKnown
@@ -166,6 +210,7 @@ class AggregateSearch extends ChangeNotifier {
                   ),
                 ),
                 result.hasMore,
+                null as CoreError?,
               );
             }
             final result = await site.searchRooms(term, page: page);
@@ -173,7 +218,9 @@ class AggregateSearch extends ChangeNotifier {
               result.items.map<AggregateSearchResult>(
                 (item) => (
                   roomId: item.roomId,
+                  profile: item.profile,
                   source: null,
+                  accountId: item.accountId,
                   author: item.userName,
                   title: item.title,
                   live:
@@ -181,6 +228,7 @@ class AggregateSearch extends ChangeNotifier {
                 ),
               ),
               result.hasMore,
+              result.partialFailure,
             );
           })
           .timeout(timeout);
@@ -192,14 +240,23 @@ class AggregateSearch extends ChangeNotifier {
       for (final item in items) {
         _store(id, item);
       }
-      state.hasMore = more;
-      state.nextPage++;
-      _recovery.succeeded(id);
+      if (page == state.nextPage) {
+        state.hasMore = more;
+        if (partial == null || more) state.nextPage++;
+      }
+      if (partial == null) {
+        if (state.retryPage == page) state.retryPage = null;
+        _recovery.succeeded(recoveryKey);
+      } else {
+        state.failure = partial.kind;
+        state.retryPage ??= page;
+      }
     } catch (error) {
       context.cancel();
       if (!current()) return;
-      _recovery.failed(id, version, error);
+      _recovery.failed(recoveryKey, version, error);
       state.failure = PlatformRecovery.classify(error);
+      state.retryPage ??= page;
     } finally {
       if (current()) {
         _requests.remove(id);

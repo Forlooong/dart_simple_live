@@ -71,28 +71,131 @@ void main() {
     expect(second.contexts[('test', 1)]!.isCancelled, isTrue);
     expect(first.pending, hasLength(1));
   });
+
   test(
-    'Douyin anchor search retains local matches without calling remote search',
-    () {
-      final douyin = _Site();
+    'keeps local Douyin results when upstream search requires login',
+    () async {
+      final site = _Site();
       final search = AggregateSearch(
-        {'douyin': douyin},
+        {'douyin': site},
         localDouyinResults: (_) => [
           (
-            roomId: '42',
-            author: '本机主播',
+            roomId: '1243',
+            author: '离线主播',
             title: null,
-            live: null,
+            live: false,
+            profile: null,
             source: '本机关注',
+            accountId: null,
           ),
         ],
       );
       addTearDown(search.dispose);
       search.setActive(true);
-      search.reset('本机主播', searchAnchors: true);
-      expect(search.supportsRemote('douyin'), false);
-      expect(douyin.pending, isEmpty);
-      expect(search.platforms['douyin']!.results['42']!.source, '本机关注');
+      search.reset('offline_id', searchAnchors: false);
+      expect(search.platforms['douyin']!.results['1243']!.source, '本机关注');
+      site.pending[('offline_id', 1)]!.completeError(
+        CoreError('抖音搜索需要登录', kind: CoreErrorKind.authRequired),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(search.platforms['douyin']!.results['1243']!.author, '离线主播');
+      expect(search.platforms['douyin']!.failure, CoreErrorKind.authRequired);
+      expect(search.ordered, [('douyin', '1243')]);
     },
   );
+
+  test('web fallback keeps the live or user search mode', () {
+    final live = douyinWebSearchUri('王者荣耀', anchors: false);
+    expect(live.host, 'www.douyin.com');
+    expect(Uri.decodeComponent(live.path), '/search/王者荣耀');
+    expect(live.queryParameters['type'], 'live');
+    final user = douyinWebSearchUri('王者荣耀', anchors: true);
+    expect(user.queryParameters['type'], 'user');
+  });
+
+  test('Douyin keyword login failure leaves room links searchable', () async {
+    final site = _Site();
+    final search = AggregateSearch({'douyin': site})..setActive(true);
+    addTearDown(search.dispose);
+    search.reset('主播', searchAnchors: false);
+    site.pending[('主播', 1)]!.completeError(
+      CoreError('需要登录', kind: CoreErrorKind.authRequired),
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(search.platforms['douyin']!.failure, CoreErrorKind.authRequired);
+
+    const link = 'https://live.douyin.com/1234';
+    search.reset(link, searchAnchors: false);
+    site.pending[(link, 1)]!.complete(_result('房间直链'));
+    await Future<void>.delayed(Duration.zero);
+    expect(search.platforms['douyin']!.results['1']!.author, '房间直链');
+  });
+
+  test(
+    'Douyin partial failure leaves successful pagination available',
+    () async {
+      final site = _Site();
+      final search = AggregateSearch({'douyin': site})..setActive(true);
+      addTearDown(search.dispose);
+      search.reset('主播', searchAnchors: false);
+      final first = _result('第一页', more: true);
+      site.pending[('主播', 1)]!.complete(
+        LiveSearchRoomResult(
+          items: first.items,
+          hasMore: first.hasMore,
+          partialFailure: CoreError('需要登录', kind: CoreErrorKind.authRequired),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      final paging = search.load('douyin');
+      site.pending[('主播', 2)]!.complete(_result('第二页'));
+      await paging;
+      expect(search.platforms['douyin']!.results['1']!.author, '第二页');
+    },
+  );
+
+  test('anchor mode keeps profile-only rows for browser opening', () async {
+    final site = _AnchorSite();
+    final search = AggregateSearch({'douyin': site});
+    addTearDown(search.dispose);
+    search.setActive(true);
+    search.reset('主播', searchAnchors: true);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(site.keyword, '主播');
+    final result = search.platforms['douyin']!.results.values.single;
+    expect(result.roomId, isEmpty);
+    expect(result.profile.toString(), 'https://www.douyin.com/user/test');
+    expect(result.author, '仅有主页的主播');
+    expect(result.live, isFalse);
+    expect(result.title, isNull);
+  });
+}
+
+class _AnchorSite extends LiveSite {
+  String? keyword;
+  int? page;
+
+  @override
+  Future<LiveSearchAnchorResult> searchAnchors(
+    String keyword, {
+    int page = 1,
+  }) async {
+    this.keyword = keyword;
+    this.page = page;
+    return LiveSearchAnchorResult(
+      hasMore: false,
+      items: [
+        LiveAnchorItem(
+          roomId: '',
+          profile: Uri.parse('https://www.douyin.com/user/test'),
+          avatar: '',
+          userName: '仅有主页的主播',
+          liveStatus: false,
+          statusKnown: true,
+        ),
+      ],
+    );
+  }
 }

@@ -37,12 +37,18 @@ class SearchAnchorController extends BasePageController<LiveAnchorItemExt> {
     var result = await site.liveSite.searchAnchors(keyword, page: page);
 
     return result.items
-        .map((e) => LiveAnchorItemExt(
-              roomId: e.roomId,
-              avatar: e.avatar,
-              liveStatus: e.liveStatus,
-              userName: e.userName,
-            ))
+        .map(
+          (e) => LiveAnchorItemExt(
+            roomId: e.roomId,
+            profile: e.profile,
+            accountId: e.accountId,
+            avatar: e.avatar,
+            liveStatus: e.liveStatus,
+            statusKnown: e.statusKnown,
+            roomTitle: e.roomTitle,
+            userName: e.userName,
+          ),
+        )
         .toList();
   }
 
@@ -59,6 +65,10 @@ class LiveAnchorItemExt extends LiveAnchorItem {
     required super.avatar,
     required super.liveStatus,
     required super.userName,
+    super.profile,
+    super.accountId,
+    super.statusKnown,
+    super.roomTitle,
   });
 
   AppFocusNode focusNode = AppFocusNode();

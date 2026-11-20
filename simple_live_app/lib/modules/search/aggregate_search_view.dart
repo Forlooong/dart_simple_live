@@ -19,13 +19,17 @@ class _AggregateSearchViewState extends State<AggregateSearchView> {
   bool liveOnly = false;
   String? filter;
 
-  String _failure(CoreErrorKind error) => switch (error) {
+  String _failure(String id, CoreErrorKind error) => switch (error) {
     CoreErrorKind.rateLimited => '平台限流，请稍后重试',
-    CoreErrorKind.authRequired => '请检查平台登录状态',
+    CoreErrorKind.authRequired =>
+      id == 'douyin' ? '抖音搜索要求登录，可在设置中填写 Cookie' : '请检查平台登录状态',
     CoreErrorKind.timeout => '请求超时',
     CoreErrorKind.schemaChanged => '平台响应格式变化',
     _ => '暂时无法搜索',
   };
+
+  Uri _webSearch(String keyword, {required bool anchors}) =>
+      douyinWebSearchUri(keyword, anchors: anchors);
 
   Future<void> _open(Uri url) async {
     if (await launchUrl(url, mode: LaunchMode.externalApplication)) return;
@@ -35,12 +39,6 @@ class _AggregateSearchViewState extends State<AggregateSearchView> {
       ).showSnackBar(const SnackBar(content: Text('无法打开抖音页面')));
     }
   }
-
-  Future<void> _openOfficialSearch({required bool anchors}) => _open(
-    Uri.https('www.douyin.com', '/search/${widget.search.keyword}', {
-      'type': anchors ? 'user' : 'live',
-    }),
-  );
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -107,7 +105,6 @@ class _AggregateSearchViewState extends State<AggregateSearchView> {
               child: Column(
                 children: [
                   if (matches.isEmpty &&
-                      sites.any(search.supportsRemote) &&
                       sites.every(
                         (id) =>
                             search.platforms[id]?.loading != true &&
@@ -148,26 +145,20 @@ class _AggregateSearchViewState extends State<AggregateSearchView> {
         [
           site.name,
           if (hasTitle) widget.search.anchors ? item.title! : item.author,
+          if (item.accountId?.isNotEmpty == true) '抖音号 ${item.accountId}',
           status,
           if (item.source != null) item.source!,
+          if (item.roomId.isEmpty) '打开抖音主页',
         ].join(' · '),
       ),
-      onTap: () =>
-          AppNavigator.toLiveRoomDetail(site: site, roomId: item.roomId),
+      onTap: item.roomId.isNotEmpty
+          ? () => AppNavigator.toLiveRoomDetail(site: site, roomId: item.roomId)
+          : () => _open(item.profile!),
     );
   }
 
   Widget _actions(String id, PlatformSearchResults result) {
     final name = Sites.allSites[id]!.name;
-    if (!widget.search.supportsRemote(id)) {
-      return ListTile(
-        title: const Text('抖音主播搜索可前往官方页面'),
-        trailing: TextButton(
-          onPressed: () => _openOfficialSearch(anchors: true),
-          child: const Text('去抖音搜索'),
-        ),
-      );
-    }
     if (result.loading) {
       return ListTile(
         title: Text('正在加载$name'),
@@ -175,27 +166,50 @@ class _AggregateSearchViewState extends State<AggregateSearchView> {
       );
     }
     if (result.failure case final failure?) {
-      return ListTile(
-        title: Text('$name · ${_failure(failure)}'),
+      final errorTile = ListTile(
+        title: Text('$name · ${_failure(id, failure)}'),
         trailing: TextButton(
-          onPressed: () => widget.search.load(id),
+          onPressed: () => widget.search.load(id, retry: true),
           child: const Text('重试'),
         ),
         subtitle: id == 'douyin'
             ? Align(
                 alignment: Alignment.centerLeft,
                 child: TextButton(
-                  onPressed: () => _openOfficialSearch(anchors: false),
+                  onPressed: () => _open(
+                    _webSearch(
+                      widget.search.keyword,
+                      anchors: widget.search.anchors,
+                    ),
+                  ),
                   child: const Text('去抖音搜索'),
                 ),
               )
             : null,
+      );
+      return Column(
+        children: [
+          errorTile,
+          if (result.hasMore && result.nextPage > 1)
+            TextButton(
+              onPressed: () => widget.search.load(id),
+              child: Text('加载更多$name结果'),
+            ),
+        ],
       );
     }
     if (result.hasMore && result.nextPage > 1) {
       return TextButton(
         onPressed: () => widget.search.load(id),
         child: Text('加载更多$name结果'),
+      );
+    }
+    if (id == 'douyin' && result.results.isEmpty) {
+      return TextButton(
+        onPressed: () => _open(
+          _webSearch(widget.search.keyword, anchors: widget.search.anchors),
+        ),
+        child: const Text('去抖音搜索'),
       );
     }
     return const SizedBox.shrink();

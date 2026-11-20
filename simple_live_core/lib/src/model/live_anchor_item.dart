@@ -3,6 +3,8 @@ import 'dart:convert';
 class LiveAnchorItem {
   /// 房间ID
   final String roomId;
+  final Uri? profile;
+  final String? accountId;
 
   /// 封面
   final String avatar;
@@ -17,6 +19,8 @@ class LiveAnchorItem {
 
   LiveAnchorItem({
     required this.roomId,
+    this.profile,
+    this.accountId,
     required this.avatar,
     required this.userName,
     required this.liveStatus,
