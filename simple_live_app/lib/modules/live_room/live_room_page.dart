@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'package:floating/floating.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:lottie/lottie.dart';
@@ -13,6 +12,7 @@ import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/app/utils.dart';
 import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
 import 'package:simple_live_app/modules/live_room/player/player_controls.dart';
+import 'package:simple_live_app/modules/live_room/player/player_picture_in_picture.dart';
 import 'package:simple_live_app/services/follow_service.dart';
 import 'package:simple_live_app/widgets/desktop_refresh_button.dart';
 import 'package:simple_live_app/widgets/follow_user_item.dart';
@@ -104,10 +104,10 @@ class LiveRoomPage extends GetView<LiveRoomController> {
     if (!Platform.isAndroid) {
       return page;
     }
-    return PiPSwitcher(
-      floating: controller.pip,
-      childWhenDisabled: page,
-      childWhenEnabled: buildMediaPlayer(),
+    return PlayerPictureInPicture(
+      status: controller.pipStatus,
+      room: page,
+      playerBuilder: (_) => buildMediaPlayer(),
     );
   }
 
@@ -259,10 +259,9 @@ class LiveRoomPage extends GetView<LiveRoomController> {
         Video(
           key: controller.globalPlayerKey,
           controller: controller.videoController,
-          pauseUponEnteringBackgroundMode:
-              AppSettingsController.instance.playerAutoPause.value,
-          resumeUponEnteringForegroundMode:
-              AppSettingsController.instance.playerAutoPause.value,
+          // The room controller serializes lifecycle commands with open and close.
+          pauseUponEnteringBackgroundMode: false,
+          resumeUponEnteringForegroundMode: false,
           controls: (state) {
             return playerControls(state, controller);
           },

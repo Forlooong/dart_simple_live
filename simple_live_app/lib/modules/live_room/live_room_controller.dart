@@ -163,8 +163,17 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   int _consecutiveRecoveryAttempts = 0;
   Duration? _firstPlaybackPosition;
   Duration? _lastPlaybackPosition;
+  Timer? _nativeErrorTimer;
+  bool _playbackInBackground = false;
+  bool _pausedForBackground = false;
+
+  void _cancelPendingPlaybackError() {
+    _nativeErrorTimer?.cancel();
+    _nativeErrorTimer = null;
+  }
 
   void _resetRecovery() {
+    _cancelPendingPlaybackError();
     _failedMediaGeneration = null;
     _pendingRetryMediaGeneration = null;
     _recoveryExhausted = false;
@@ -357,39 +366,51 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   }
 
   void setAutoExit() {
-    if (!autoExitEnable.value) {
-      autoExitTimer?.cancel();
-      return;
-    }
     autoExitTimer?.cancel();
+    autoExitTimer = null;
+    if (!autoExitEnable.value || playerClosing) return;
     countdown.value = autoExitMinutes.value * 60;
     autoExitTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
       countdown.value -= 1;
-      if (countdown.value <= 0) {
-        timer = Timer(const Duration(seconds: 10), () async {
-          await WakelockPlus.disable();
-          exit(0);
-        });
-        autoExitTimer?.cancel();
-        var delay = await Utils.showAlertDialog(
-          "定时关闭已到时,是否延迟关闭?",
-          title: "延迟关闭",
-          confirm: "延迟",
-          cancel: "关闭",
-          selectable: true,
-        );
-        if (delay) {
-          timer.cancel();
-          delayAutoExit.value = true;
-          showAutoExitSheet();
-          setAutoExit();
-        } else {
-          delayAutoExit.value = false;
-          await WakelockPlus.disable();
-          exit(0);
-        }
+      if (countdown.value > 0) return;
+
+      timer.cancel();
+      late final Timer graceTimer;
+      graceTimer = Timer(
+        const Duration(seconds: 10),
+        () => unawaited(_exitWhenDue(graceTimer)),
+      );
+      autoExitTimer = graceTimer;
+      final delay = await Utils.showAlertDialog(
+        "定时关闭已到时,是否延迟关闭?",
+        title: "延迟关闭",
+        confirm: "延迟",
+        cancel: "关闭",
+        selectable: true,
+      );
+      if (playerClosing || autoExitTimer != graceTimer) return;
+      graceTimer.cancel();
+      delayAutoExit.value = delay;
+      if (delay) {
+        showAutoExitSheet();
+        setAutoExit();
+      } else {
+        await _exitWhenDue(graceTimer);
       }
     });
+  }
+
+  Future<void> _exitWhenDue(Timer timer) async {
+    if (playerClosing || autoExitTimer != timer) return;
+    try {
+      await WakelockPlus.disable();
+    } catch (error) {
+      Log.logPrint(error);
+    }
+    if (playerClosing || autoExitTimer != timer) return;
+    autoExitTimer = null;
+    Log.i("定时关闭应用");
+    exit(0);
   }
   // 弹窗逻辑
 
@@ -672,7 +693,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         // A manual refresh can confirm that the current stream is offline.
         // Invalidating its URL state alone does not unload native playback.
         await runPlayerCommand(() async {
-          if (_isCurrentRoom(generation)) await player.stop();
+          if (_isCurrentRoom(generation)) await _stopPlayback();
         });
         if (!_isCurrentRoom(generation)) return;
       }
@@ -802,7 +823,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       Log.logPrint(e);
       errorMsg.value = "无法读取或打开播放地址";
       SmartDialog.showToast(errorMsg.value);
-      if (_playlistReady) mediaError(errorMsg.value);
+      if (_playlistReady) _confirmPlaybackError(errorMsg.value);
     }
   }
 
@@ -836,6 +857,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       // A failure belongs to one native open, not to the whole room. An old
       // error + EOF pair must not consume another attempt during URL refresh.
       _mediaGeneration++;
+      _cancelPendingPlaybackError();
       _failedMediaGeneration = null;
       _firstPlaybackPosition = null;
       _lastPlaybackPosition = null;
@@ -844,10 +866,14 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       // advancing to another line independently of application recovery.
       // open() also avoids jump() -> play() -> seek(0) on an ended live FLV.
       playbackDiagnostics.opened();
+      final play = !(_playbackInBackground &&
+          AppSettingsController.instance.playerAutoPause.value);
+      _pausedForBackground = false;
       await playbackDiagnostics.measure(
         PlaybackStage.open,
-        () => player.open(media),
+        () => player.open(media, play: play),
       );
+      _pausedForBackground = !play;
     });
   }
 
@@ -875,13 +901,14 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       if (!_isCurrentPlayback(room, playback)) return;
       Log.logPrint(e);
       errorMsg.value = "播放失败";
-      mediaError(errorMsg.value);
+      _confirmPlaybackError(errorMsg.value);
     }
   }
 
   @override
   void mediaEnd() {
     if (playerClosing || !_playlistReady) return;
+    _cancelPendingPlaybackError();
     playbackDiagnostics.terminal(PlaybackTerminal.eof);
     super.mediaEnd();
     _retryPlayback();
@@ -890,7 +917,23 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   int mediaErrorRetryCount = 0;
   @override
   void mediaError(String error) {
+    if (playerClosing ||
+        !_playlistReady ||
+        _recoveryExhausted ||
+        _failedMediaGeneration == _mediaGeneration) {
+      return;
+    }
+    // media_kit also forwards mpv decoder log messages on this stream.
+    // Give the current stream time to show progress before replacing it.
+    _nativeErrorTimer ??= Timer(const Duration(milliseconds: 750), () {
+      _nativeErrorTimer = null;
+      _confirmPlaybackError(error);
+    });
+  }
+
+  void _confirmPlaybackError(String error) {
     if (playerClosing || !_playlistReady) return;
+    _cancelPendingPlaybackError();
     playbackDiagnostics.terminal(PlaybackTerminal.error);
     super.mediaError(error);
     _retryPlayback();
@@ -995,7 +1038,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       _playlistReady = false;
       liveStatus.value = false;
       await runPlayerCommand(() async {
-        if (_isCurrentPlayback(room, playback)) await player.stop();
+        if (_isCurrentPlayback(room, playback)) await _stopPlayback();
       });
       return false;
     }
@@ -1042,8 +1085,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         _failedMediaGeneration == _mediaGeneration) {
       return;
     }
+    final previous = _lastPlaybackPosition;
+    if (previous != null && position > previous) _cancelPendingPlaybackError();
     if (_firstPlaybackPosition == null ||
-        (_lastPlaybackPosition != null && position < _lastPlaybackPosition!)) {
+        (previous != null && position < previous)) {
       _firstPlaybackPosition = position;
     }
     _lastPlaybackPosition = position;
@@ -1061,6 +1106,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   @override
   Future<void> closePlayer() {
+    autoExitTimer?.cancel();
+    autoExitTimer = null;
+    _cancelPendingPlaybackError();
     _sourceRequest?.cancel();
     return super.closePlayer();
   }
@@ -1566,7 +1614,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     // 停止播放
     try {
       await runPlayerCommand(() async {
-        if (_isCurrentRoom(generation)) await player.stop();
+        if (_isCurrentRoom(generation)) await _stopPlayback();
       });
     } catch (e) {
       Log.logPrint(e);
@@ -1586,6 +1634,39 @@ $errorStack''');
     SmartDialog.showToast("已复制错误信息");
   }
 
+  Future<void> _stopPlayback() async {
+    await player.stop();
+    _pausedForBackground = false;
+  }
+
+  void _updatePlaybackLifecycle(AppLifecycleState state) {
+    final background = state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached;
+    if ((!background && state != AppLifecycleState.resumed) ||
+        _playbackInBackground == background) {
+      return;
+    }
+    _playbackInBackground = background;
+    unawaited(runPlayerCommand(() async {
+      if (_playbackInBackground != background) return;
+      if (background) {
+        if (AppSettingsController.instance.playerAutoPause.value &&
+            player.state.playing) {
+          await player.pause();
+          _pausedForBackground = true;
+        }
+      } else if (_pausedForBackground) {
+        _pausedForBackground = false;
+        // play() seeks completed media back to zero. Recovery opens a fresh
+        // source when the previous stream has already ended.
+        if (!player.state.completed &&
+            _failedMediaGeneration != _mediaGeneration) {
+          await player.play();
+        }
+      }
+    }));
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
@@ -1594,6 +1675,7 @@ $errorStack''');
       return;
     }
 
+    _updatePlaybackLifecycle(state);
     if (state != AppLifecycleState.resumed) {
       Log.d("进入后台");
       //进入后台，关闭弹幕
@@ -1664,7 +1746,6 @@ $errorStack''');
       WidgetsBinding.instance.removeObserver(this);
       scrollController.removeListener(scrollListener);
       scrollController.dispose();
-      autoExitTimer?.cancel();
       _liveDurationTimer?.cancel();
       liveDanmaku.stop();
     } finally {

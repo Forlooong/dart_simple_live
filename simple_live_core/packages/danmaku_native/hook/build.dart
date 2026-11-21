@@ -103,13 +103,17 @@ Map<String, String> localToolchainHomes() {
     entry = entry.replaceAll('"', '').trim();
     if (entry.isEmpty || p.basename(entry).toLowerCase() != 'bin') continue;
     final cargoHome = p.dirname(p.normalize(entry));
-    final rustupHome = p.join(p.dirname(cargoHome), 'rustup');
     final executable = p.join(
       entry,
       Platform.isWindows ? 'rustup.exe' : 'rustup',
     );
-    if (File(executable).existsSync() && Directory(rustupHome).existsSync()) {
-      return {'CARGO_HOME': cargoHome, 'RUSTUP_HOME': rustupHome};
+    if (!File(executable).existsSync()) continue;
+    final toolchainRoot = p.dirname(cargoHome);
+    for (final name in ['rustup', '.rustup']) {
+      final rustupHome = p.join(toolchainRoot, name);
+      if (Directory(rustupHome).existsSync()) {
+        return {'CARGO_HOME': cargoHome, 'RUSTUP_HOME': rustupHome};
+      }
     }
   }
   return {};

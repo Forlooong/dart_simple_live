@@ -253,6 +253,7 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
   final DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
 
   final pip = Floating();
+  late final pipStatus = pip.pipStatusStream;
   StreamSubscription<PiPStatus>? _pipSubscription;
 
   //final VolumeController volumeController = VolumeController();
@@ -503,7 +504,7 @@ mixin PlayerSystemMixin on PlayerMixin, PlayerStateMixin, PlayerDanmakuMixin {
     await pip.enable(ImmediatePiP(aspectRatio: ratio));
 
     if (playerClosing) return;
-    _pipSubscription ??= pip.pipStatusStream.listen((event) {
+    _pipSubscription ??= pipStatus.listen((event) {
       if (playerClosing) return;
       if (event == PiPStatus.disabled) {
         danmakuController?.clear();

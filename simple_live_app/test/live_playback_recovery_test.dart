@@ -79,18 +79,43 @@ class _NativePlayer extends PlatformPlayer {
   void Function()? onOpen;
   int disposals = 0;
   int stops = 0;
+  int pauses = 0;
+  int resumes = 0;
+  final openPlayFlags = <bool>[];
 
   void emitError(String message) => errorController.add(message);
-  void emitCompleted() => completedController.add(true);
-  void emitPlaying() => playingController.add(true);
+  void emitCompleted() {
+    state = state.copyWith(completed: true, playing: false);
+    completedController.add(true);
+  }
+
+  void emitPlaying() {
+    state = state.copyWith(playing: true);
+    playingController.add(true);
+  }
+
   void emitPosition(Duration position) => positionController.add(position);
 
   @override
   Future<void> open(Playable playable, {bool play = true}) async {
     opens.add(playable);
+    openPlayFlags.add(play);
     completedController.add(false);
     onOpen?.call();
     await holdOpen?.future;
+    state = state.copyWith(completed: false, playing: play);
+  }
+
+  @override
+  Future<void> pause() async {
+    pauses++;
+    state = state.copyWith(playing: false);
+  }
+
+  @override
+  Future<void> play() async {
+    resumes++;
+    emitPlaying();
   }
 
   @override
@@ -359,6 +384,28 @@ void main() {
     await finishDialogs(tester);
   });
 
+  testWidgets('closing the player cancels a pending timed app exit', (
+    tester,
+  ) async {
+    await tester.pumpWidget(const GetMaterialApp(home: Scaffold()));
+    final room = _Room(_Site(), _NativePlayer());
+    addTearDown(room.scrollController.dispose);
+    room.autoExitEnable.value = true;
+    room.autoExitMinutes.value = 0;
+    room.setAutoExit();
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+
+    expect(find.text('定时关闭已到时,是否延迟关闭?'), findsOneWidget);
+    final pendingExit = room.autoExitTimer;
+    expect(pendingExit?.isActive, isTrue);
+    await tester.runAsync(room.closePlayer);
+    expect(pendingExit?.isActive, isFalse);
+    Get.back(result: false);
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 11));
+  });
+
   test('alternate CDN lines are not an auto-advancing native playlist',
       () async {
     final native = _NativePlayer();
@@ -411,6 +458,74 @@ void main() {
     expect(attempts, 1, reason: 'error and EOF describe the same failure');
     expect(native.opens, hasLength(1), reason: 'close invalidates URL refresh');
     expect(native.jumps, isEmpty);
+  });
+
+  test('decoder error with advancing playback leaves the stream open', () async {
+    final provider = _Site();
+    final native = _NativePlayer();
+    final room = await _start(provider, native);
+    native.emitPosition(const Duration(seconds: 30));
+    native.emitError('decoder reported a bad frame');
+    native.emitPosition(const Duration(seconds: 31));
+    await Future<void>.delayed(const Duration(milliseconds: 1100));
+
+    expect(provider.requests, 1);
+    expect(native.opens, hasLength(1));
+    expect(room.mediaErrorRetryCount, 0);
+  });
+
+  test('lifecycle pause waits for an open and close discards queued resume',
+      () async {
+    AppSettingsController.instance.playerAutoPause.value = true;
+    final native = _NativePlayer();
+    final room = await _start(_Site(), native);
+    final release = native.holdOpen = Completer<void>();
+    room.changePlayLine(1);
+    await _until(() => native.opens.length == 2);
+
+    room.didChangeAppLifecycleState(AppLifecycleState.paused);
+    expect(native.pauses, 0);
+    native.holdOpen = null;
+    release.complete();
+    await room.runPlayerCommand(() async {});
+    expect(native.pauses, 1);
+
+    final started = Completer<void>();
+    final finish = Completer<void>();
+    final blockingCommand = room.runPlayerCommand(() {
+      started.complete();
+      return finish.future;
+    });
+    await started.future;
+    room.didChangeAppLifecycleState(AppLifecycleState.resumed);
+    final closed = room.closePlayer();
+    finish.complete();
+    await blockingCommand;
+    await closed;
+    expect(native.resumes, 0);
+    expect(native.disposals, 1);
+  });
+
+  test('background recovery opens paused and resumes only the replacement',
+      () async {
+    AppSettingsController.instance.playerAutoPause.value = true;
+    final native = _NativePlayer();
+    final room = await _start(_Site(), native);
+    room.didChangeAppLifecycleState(AppLifecycleState.paused);
+    await room.runPlayerCommand(() async {});
+    expect(native.pauses, 1);
+
+    native.emitCompleted();
+    await _until(() => native.opens.length == 2);
+    expect(native.openPlayFlags, [true, false]);
+    expect(native.resumes, 0);
+
+    room.didChangeAppLifecycleState(AppLifecycleState.inactive);
+    await room.runPlayerCommand(() async {});
+    expect(native.resumes, 0);
+    room.didChangeAppLifecycleState(AppLifecycleState.resumed);
+    await room.runPlayerCommand(() async {});
+    expect(native.resumes, 1);
   });
 
   test('manual line selection rejects an older refresh response', () async {
