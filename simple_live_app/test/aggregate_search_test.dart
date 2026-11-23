@@ -88,6 +88,7 @@ void main() {
             roomId: '1243',
             author: '离线主播',
             title: null,
+            image: null,
             live: false,
             profile: null,
             source: '本机关注',

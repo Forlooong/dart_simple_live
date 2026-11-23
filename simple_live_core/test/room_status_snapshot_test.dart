@@ -172,10 +172,7 @@ void main() {
             expect(request.uri.queryParameters['room_id'], sessionId);
             return {
               'data': {
-                'room': {
-                  ...webRoom,
-                  'start_time': '1700000000000',
-                },
+                'room': {...webRoom, 'start_time': '1700000000000'},
               },
             };
           case '/123':
@@ -218,6 +215,67 @@ void main() {
       expect(reflowChat.cookie, 'ttwid=fixture; sessionid=signed-in');
     },
   );
+
+  test('Douyin follow refresh resolves web room time by broadcast ID', () async {
+    var live = true;
+    var reflowAvailable = true;
+    var roomId = '7711164227318254351';
+    respond = (request) {
+      final room = {'id_str': roomId, 'status': live ? 2 : 4};
+      switch (request.uri.path) {
+        case '/webcast/room/web/enter/':
+          return {
+            'data': {
+              'data': [room],
+            },
+          };
+        case '/123':
+          final state = jsonEncode({
+            'state': {
+              'appStore': {},
+              'roomStore': {
+                'roomInfo': {'room': room},
+              },
+            },
+          });
+          return '<script>self.__pace_f.push([1,${jsonEncode('1:$state]\n')}])</script>';
+        case '/webcast/room/reflow/info/':
+          expect(request.uri.queryParameters['room_id'], roomId);
+          if (!reflowAvailable) throw StateError('fixture unavailable');
+          return {
+            'data': {
+              'room': {'start_time': 1700000000},
+            },
+          };
+        default:
+          throw StateError('Unexpected request ${request.uri.path}');
+      }
+    };
+    final site = DouyinSite();
+    Future<LiveRoomStatus> refresh() =>
+        site.getRoomStatusSnapshot(roomId: '123');
+    expect((await refresh()).showTime, '1700000000');
+    expect((await refresh()).showTime, '1700000000');
+    expect(
+      requests.where((path) => path.endsWith('/reflow/info/')),
+      hasLength(1),
+    );
+
+    roomId = '7711164227318254352';
+    reflowAvailable = false;
+    final next = await refresh();
+    expect(next.live, isTrue);
+    expect(next.showTime, isNull);
+
+    live = false;
+    final offline = await refresh();
+    expect(offline.live, isFalse);
+    expect(offline.showTime, isNull);
+    expect(
+      requests.where((path) => path.endsWith('/reflow/info/')),
+      hasLength(2),
+    );
+  });
 
   test('malformed status remains an error, not an offline result', () async {
     respond = (_) => {

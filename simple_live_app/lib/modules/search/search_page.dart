@@ -17,50 +17,80 @@ class SearchPage extends GetView<AppSearchController> {
       },
       child: Scaffold(
         appBar: AppBar(
-          automaticallyImplyLeading: false,
-          title: TextField(
-            controller: controller.searchController,
-            autofocus: true,
-            onChanged: controller.onKeywordEdited,
-            decoration: InputDecoration(
-              hintText: "输入主播或直播间关键词",
-              border: OutlineInputBorder(borderRadius: AppStyle.radius24),
-              contentPadding: AppStyle.edgeInsetsH12,
-              prefixIcon: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    tooltip: "返回",
-                    onPressed: Get.back,
-                    icon: const Icon(Icons.arrow_back),
+          leading: BackButton(onPressed: Get.back),
+          titleSpacing: 0,
+          title: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 760),
+            child: TextField(
+              controller: controller.searchController,
+              autofocus: true,
+              textInputAction: TextInputAction.search,
+              onChanged: controller.onKeywordEdited,
+              decoration: InputDecoration(
+                hintText: '搜索直播间或主播',
+                filled: true,
+                fillColor: Theme.of(context).colorScheme.surfaceContainerLow,
+                border: OutlineInputBorder(
+                  borderRadius: AppStyle.radius24,
+                  borderSide: BorderSide.none,
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: AppStyle.radius24,
+                  borderSide: BorderSide(
+                    color: Theme.of(context).colorScheme.primary,
                   ),
-                  Obx(
-                    () => DropdownButton<int>(
-                      underline: const SizedBox(),
-                      items: const [
-                        DropdownMenuItem(value: 0, child: Text("房间")),
-                        DropdownMenuItem(value: 1, child: Text("主播")),
-                      ],
-                      value: controller.searchMode.value,
-                      onChanged: (e) {
-                        controller.searchMode.value = e ?? 0;
-                        controller.doSearch();
-                      },
+                ),
+                contentPadding: AppStyle.edgeInsetsH12,
+                prefixIcon: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    AppStyle.hGap12,
+                    Obx(
+                      () => DropdownButton<int>(
+                        underline: const SizedBox(),
+                        items: const [
+                          DropdownMenuItem(value: 0, child: Text("房间")),
+                          DropdownMenuItem(value: 1, child: Text("主播")),
+                        ],
+                        value: controller.searchMode.value,
+                        onChanged: (e) {
+                          controller.searchMode.value = e ?? 0;
+                          controller.doSearch();
+                        },
+                      ),
                     ),
+                    AppStyle.hGap8,
+                  ],
+                ),
+                suffixIcon: ValueListenableBuilder(
+                  valueListenable: controller.searchController,
+                  builder: (context, value, _) => Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (value.text.isNotEmpty)
+                        IconButton(
+                          tooltip: '清除关键词',
+                          onPressed: () {
+                            controller.searchController.clear();
+                            controller.onKeywordEdited('');
+                          },
+                          icon: const Icon(Icons.close_rounded, size: 20),
+                        ),
+                      IconButton(
+                        tooltip: '搜索',
+                        onPressed: controller.doSearch,
+                        icon: const Icon(Icons.search_rounded),
+                      ),
+                    ],
                   ),
-                  AppStyle.hGap8,
-                ],
+                ),
               ),
-              suffixIcon: IconButton(
-                tooltip: "搜索",
-                onPressed: controller.doSearch,
-                icon: const Icon(Icons.search),
-              ),
+              onSubmitted: (e) {
+                controller.doSearch();
+              },
             ),
-            onSubmitted: (e) {
-              controller.doSearch();
-            },
           ),
+          actions: const [AppStyle.hGap12],
           bottom: TabBar(
             controller: controller.tabController,
             padding: EdgeInsets.zero,

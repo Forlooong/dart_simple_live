@@ -34,11 +34,11 @@ class AppSearchController extends GetxController
         ? url!.pathSegments.single
         : null;
     final db = DBService.instance;
-    for (final (site, room, author, source) in [
+    for (final (site, room, author, image, source) in [
       for (final item in db.followBox.values)
-        (item.siteId, item.roomId, item.userName, '本机关注'),
+        (item.siteId, item.roomId, item.userName, item.face, '本机关注'),
       for (final item in db.historyBox.values)
-        (item.siteId, item.roomId, item.userName, '观看历史'),
+        (item.siteId, item.roomId, item.userName, item.face, '观看历史'),
     ]) {
       if (site == 'douyin' &&
           RegExp(r'^\d{1,16}$').hasMatch(room) &&
@@ -49,6 +49,7 @@ class AppSearchController extends GetxController
           roomId: room,
           author: author,
           title: null,
+          image: image.isEmpty ? null : image,
           live: Sites.allSites[site]?.liveSite.peekRoomStatus(room)?.live,
           profile: null,
           source: source,

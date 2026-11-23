@@ -40,6 +40,7 @@ class DouyinSite extends LiveSite {
 
   List<LiveRoomItem>? _recommendSnapshot;
   Future<List<LiveRoomItem>>? _recommendBuild;
+  final _broadcastStartTimes = <String, String>{};
 
   @override
   String id = "douyin";
@@ -706,13 +707,22 @@ class DouyinSite extends LiveSite {
     if (startTime != null || !RegExp(r'^\d{17,20}$').hasMatch(roomId)) {
       return startTime;
     }
+    final cached = _broadcastStartTimes[roomId];
+    if (cached != null) return cached;
     // Reflow gives the start time for the exact broadcast, which is often
     // absent from web room metadata.
     final parent = RequestContext.current;
     final context = RequestContext(timeout: const Duration(seconds: 4));
     try {
       final data = await context.run(() => _getRoomDataByRoomId(roomId));
-      return _startTime(_searchMap(data['data'])?['room']);
+      final resolved = _startTime(_searchMap(data['data'])?['room']);
+      if (resolved != null) {
+        if (_broadcastStartTimes.length >= 128) {
+          _broadcastStartTimes.remove(_broadcastStartTimes.keys.first);
+        }
+        _broadcastStartTimes[roomId] = resolved;
+      }
+      return resolved;
     } catch (_) {
       parent?.check();
       return null;
@@ -1377,6 +1387,17 @@ class DouyinSite extends LiveSite {
     return (await getRoomStatusSnapshot(roomId: roomId)).live;
   }
 
+  Future<LiveRoomStatus> _webRoomStatus(Object? data) async {
+    final live = LiveStatusParser.douyinStatusCode(data) == 2;
+    final room = _searchMap(data);
+    if (!live || room == null) return const LiveRoomStatus(live: false);
+    final roomId = _searchText(room['id_str'] ?? room['id']);
+    return LiveRoomStatus(
+      live: true,
+      showTime: await _resolveStartTime(room, roomId),
+    );
+  }
+
   @override
   Future<LiveRoomStatus> getRoomStatusSnapshot({required String roomId}) async {
     var webRid = roomId;
@@ -1394,12 +1415,7 @@ class DouyinSite extends LiveSite {
     }
     try {
       final data = await _getRoomDataByApi(webRid);
-      final room = data['data'][0];
-      final live = LiveStatusParser.douyinStatusCode(room) == 2;
-      return LiveRoomStatus(
-        live: live,
-        showTime: live ? _startTime(room) : null,
-      );
+      return _webRoomStatus(data['data'][0]);
     } catch (error) {
       RequestContext.current?.check();
       if (error is CoreError &&
@@ -1407,12 +1423,7 @@ class DouyinSite extends LiveSite {
               error.kind == CoreErrorKind.authRequired))
         rethrow;
       final (data, _) = await _getRoomDataByHtml(webRid);
-      final room = data['roomStore']['roomInfo']['room'];
-      final live = LiveStatusParser.douyinStatusCode(room) == 2;
-      return LiveRoomStatus(
-        live: live,
-        showTime: live ? _startTime(room) : null,
-      );
+      return _webRoomStatus(data['roomStore']['roomInfo']['room']);
     }
   }
 

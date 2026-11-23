@@ -49,7 +49,9 @@ class FollowUser {
   final statusIssue = RxnString();
 
   /// 开播时间戳
-  String? liveStartTime;
+  final _liveStartTime = RxnString();
+  String? get liveStartTime => _liveStartTime.value;
+  set liveStartTime(String? value) => _liveStartTime.value = value;
 
   /// 旧版备份没有通知字段，导入时保留同一房间已有的通知选择。
   /// 覆盖同步的调用方需在清空数据库前保存 [existing]。

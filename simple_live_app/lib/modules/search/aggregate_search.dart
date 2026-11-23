@@ -7,6 +7,7 @@ typedef AggregateSearchResult = ({
   String roomId,
   String author,
   String? title,
+  String? image,
   bool? live,
   Uri? profile,
   String? source,
@@ -124,6 +125,7 @@ class AggregateSearch extends ChangeNotifier {
       roomId: item.roomId.isEmpty ? previous?.roomId ?? '' : item.roomId,
       author: item.author.isEmpty ? previous?.author ?? '' : item.author,
       title: item.title ?? previous?.title,
+      image: item.image ?? previous?.image,
       live: item.live ?? previous?.live,
       profile: item.profile ?? previous?.profile,
       source: item.source,
@@ -206,6 +208,7 @@ class AggregateSearch extends ChangeNotifier {
                     accountId: item.accountId,
                     author: item.userName,
                     title: item.roomTitle,
+                    image: item.avatar.isEmpty ? null : item.avatar,
                     live: item.statusKnown
                         ? item.liveStatus
                         : site.peekRoomStatus(item.roomId)?.live,
@@ -225,6 +228,7 @@ class AggregateSearch extends ChangeNotifier {
                   accountId: item.accountId,
                   author: item.userName,
                   title: item.title,
+                  image: item.cover.isEmpty ? null : item.cover,
                   live:
                       item.liveStatus ?? site.peekRoomStatus(item.roomId)?.live,
                 ),

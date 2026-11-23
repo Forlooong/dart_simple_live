@@ -100,14 +100,23 @@ class FollowUserItem extends StatelessWidget {
                 ),
               ),
             )
-          else if (item.liveStatus.value == 2 && item.liveStartTime != null)
-            Padding(
-              padding: AppStyle.edgeInsetsL8,
-              child: Text(
-                '开播了${formatLiveDuration(item.liveStartTime)}',
-                style: const TextStyle(fontSize: 12, color: Colors.grey),
-              ),
-            ),
+          else
+            Obx(() {
+              final start = item.liveStartTime;
+              if (item.liveStatus.value != 2 || start == null) {
+                return const SizedBox.shrink();
+              }
+              return Padding(
+                padding: AppStyle.edgeInsetsL8,
+                child: Text(
+                  '开播了${formatLiveDuration(start)}',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              );
+            }),
         ],
       ),
       trailing: playing
