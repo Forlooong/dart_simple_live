@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 import 'package:simple_live_core/src/common/http_client.dart';
@@ -18,10 +20,12 @@ void main() {
   late Dio intercepted;
   late List<String> requests;
   late Object Function(RequestOptions) respond;
+  late Headers responseHeaders;
 
   setUp(() {
     original = HttpClient.instance.dio;
     requests = [];
+    responseHeaders = Headers();
     intercepted = Dio();
     intercepted.interceptors.add(
       InterceptorsWrapper(
@@ -33,6 +37,7 @@ void main() {
                 requestOptions: request,
                 statusCode: 200,
                 data: respond(request),
+                headers: responseHeaders,
               ),
             );
           } catch (error) {
@@ -131,6 +136,86 @@ void main() {
       final version = site.statusConfigurationVersion;
       site.cookie = 'changed';
       expect(site.statusConfigurationVersion, version + 1);
+    },
+  );
+
+  test(
+    'Douyin live detail uses reflow start time and the page chat session',
+    () async {
+      const sessionId = '7711164227318254351';
+      final webRoom = {
+        'id_str': sessionId,
+        'status': 2,
+        'title': '直播间「测试」',
+        'cover': {
+          'url_list': ['cover'],
+        },
+        'owner': {
+          'web_rid': '123',
+          'nickname': '主播',
+          'avatar_thumb': {
+            'url_list': ['avatar'],
+          },
+        },
+        'room_view_stats': {'display_value': 0},
+      };
+      respond = (request) {
+        switch (request.uri.path) {
+          case '/webcast/room/web/enter/':
+            return {
+              'data': {
+                'data': [webRoom],
+                'user': {},
+              },
+            };
+          case '/webcast/room/reflow/info/':
+            expect(request.uri.queryParameters['room_id'], sessionId);
+            return {
+              'data': {
+                'room': {
+                  ...webRoom,
+                  'start_time': '1700000000000',
+                },
+              },
+            };
+          case '/123':
+            expect(request.method, 'GET');
+            responseHeaders.set('set-cookie', [
+              'ttwid=fixture; Path=/; HttpOnly',
+              'sessionid=ignored; Path=/; HttpOnly',
+            ]);
+            final state = jsonEncode({
+              'state': {
+                'appStore': {},
+                'roomStore': {
+                  'roomInfo': {'room': webRoom},
+                },
+                'userStore': {
+                  'odin': {'user_unique_id': '7100000000000000222'},
+                },
+              },
+            });
+            return '<script>self.__pace_f.push([1,${jsonEncode('1:$state]\n')}])</script>';
+          default:
+            throw StateError('Unexpected request ${request.uri.path}');
+        }
+      };
+
+      final site = DouyinSite();
+      final detail = await site.getRoomDetail(roomId: '123');
+      expect(detail.title, '直播间「测试」');
+      expect(detail.showTime, '1700000000');
+      final chat = detail.danmakuData as DouyinDanmakuArgs;
+      expect(chat.roomId, sessionId);
+      expect(chat.userId, '7100000000000000222');
+      expect(chat.cookie, 'ttwid=fixture');
+
+      site.cookie = 'ttwid=outdated; sessionid=signed-in';
+      final reflow = await site.getRoomDetail(roomId: sessionId);
+      expect(reflow.showTime, detail.showTime);
+      final reflowChat = reflow.danmakuData as DouyinDanmakuArgs;
+      expect(reflowChat.userId, chat.userId);
+      expect(reflowChat.cookie, 'ttwid=fixture; sessionid=signed-in');
     },
   );
 

@@ -91,6 +91,33 @@ class SearchRoomPage extends GetView<SearchRoomController> {
                 )
                 .toList(),
           ),
+          Obx(() {
+            final failure = controller.partialFailure.value;
+            if (failure == null || controller.loadding.value) {
+              return const SizedBox.shrink();
+            }
+            return Padding(
+              padding: AppStyle.edgeInsetsA12,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Flexible(
+                    child: Text(
+                      '部分搜索结果未加载。$failure',
+                      style: AppStyle.textStyleWhite,
+                    ),
+                  ),
+                  AppStyle.hGap24,
+                  HighlightButton(
+                    text: '重试',
+                    iconData: Icons.refresh,
+                    focusNode: controller.retryFocusNode,
+                    onTap: controller.refreshData,
+                  ),
+                ],
+              ),
+            );
+          }),
           AppStyle.vGap24,
           Expanded(
             child: Obx(

@@ -1,5 +1,7 @@
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:get/get_rx/src/rx_types/rx_types.dart';
+import 'package:simple_live_core/simple_live_core.dart';
+import 'package:simple_live_tv_app/app/app_focus_node.dart';
 import 'package:simple_live_tv_app/app/constant.dart';
 import 'package:simple_live_tv_app/app/controller/base_controller.dart';
 import 'package:simple_live_tv_app/app/sites.dart';
@@ -10,6 +12,8 @@ class SearchRoomController extends BasePageController<LiveRoomItemExt> {
   SearchRoomController(this.keyword);
   var siteId = Constant.kBiliBili.obs;
   var site = Sites.allSites[Constant.kBiliBili]!;
+  final partialFailure = Rxn<CoreError>();
+  final retryFocusNode = AppFocusNode();
 
   @override
   void onInit() {
@@ -32,8 +36,23 @@ class SearchRoomController extends BasePageController<LiveRoomItemExt> {
   }
 
   @override
+  Future<void> refreshData() async {
+    partialFailure.value = null;
+    await super.refreshData();
+  }
+
+  @override
   Future<List<LiveRoomItemExt>> getData(int page, int pageSize) async {
-    var result = await site.liveSite.searchRooms(keyword, page: page);
+    final requestedSite = site;
+    final result = await requestedSite.liveSite.searchRooms(
+      keyword,
+      page: page,
+    );
+    final failure = result.partialFailure;
+    if (requestedSite == site && failure != null) {
+      if (page == 1 && result.items.isEmpty) throw failure;
+      partialFailure.value ??= failure;
+    }
 
     return result.items
         .map(
@@ -54,6 +73,7 @@ class SearchRoomController extends BasePageController<LiveRoomItemExt> {
   @override
   void onClose() {
     scrollController.removeListener(scrollListener);
+    retryFocusNode.dispose();
     super.onClose();
   }
 }

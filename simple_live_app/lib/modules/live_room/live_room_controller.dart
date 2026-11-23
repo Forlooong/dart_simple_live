@@ -923,9 +923,18 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         _failedMediaGeneration == _mediaGeneration) {
       return;
     }
-    // media_kit also forwards mpv decoder log messages on this stream.
-    // Give the current stream time to show progress before replacing it.
-    _nativeErrorTimer ??= Timer(const Duration(milliseconds: 750), () {
+    // mpv can report decoder errors during a short Douyu FLV buffering gap.
+    // An already playing stream gets time to resume. Confirmed EOF still
+    // goes straight to recovery through mediaEnd.
+    final douyuPlaybackInProgress =
+        site.id == Constant.kDouyu &&
+        (detail.value?.status ?? false) &&
+        _lastPlaybackPosition != null &&
+        (player.state.playing || player.state.buffering);
+    final grace = douyuPlaybackInProgress
+        ? const Duration(seconds: 5)
+        : const Duration(milliseconds: 750);
+    _nativeErrorTimer ??= Timer(grace, () {
       _nativeErrorTimer = null;
       _confirmPlaybackError(error);
     });
@@ -1037,6 +1046,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       _recoveryExhausted = true;
       _playlistReady = false;
       liveStatus.value = false;
+      _liveDurationTimer?.cancel();
+      liveDuration.value = "00:00:00";
       await runPlayerCommand(() async {
         if (_isCurrentPlayback(room, playback)) await _stopPlayback();
       });
@@ -1068,7 +1079,9 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     );
     if (!_isCurrentPlayback(room, playback)) return false;
     if (freshUrls.urls.isEmpty) throw StateError('No live URLs');
+    final previousStart = detail.value?.showTime;
     detail.value = freshDetail;
+    if (freshDetail.showTime != previousStart) startLiveDurationTimer();
     qualites.value = freshQualities;
     currentQuality = qualityIndex;
     currentQualityInfo.value = freshQualities[qualityIndex].quality;
@@ -1697,35 +1710,32 @@ $errorStack''');
     }
   }
 
-  // 用于启动开播时长计算和更新的函数
   void startLiveDurationTimer() {
-    // 如果不是直播状态或者 showTime 为空，则不启动定时器
-    if (!(detail.value?.status ?? false) || detail.value?.showTime == null) {
-      liveDuration.value = "00:00:00"; // 未开播时显示 00:00:00
-      _liveDurationTimer?.cancel();
+    _liveDurationTimer?.cancel();
+    final room = detail.value;
+    if (room == null || !room.status) {
+      liveDuration.value = "00:00:00";
+      return;
+    }
+    final start = int.tryParse(room.showTime ?? '');
+    if (start == null || start <= 0) {
+      liveDuration.value = "--:--:--";
       return;
     }
 
-    try {
-      int startTimeStamp = int.parse(detail.value!.showTime!);
-      // 取消之前的定时器
-      _liveDurationTimer?.cancel();
-      // 创建新的定时器，每秒更新一次
-      _liveDurationTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-        int currentTimeStamp = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-        int durationInSeconds = currentTimeStamp - startTimeStamp;
-
-        int hours = durationInSeconds ~/ 3600;
-        int minutes = (durationInSeconds % 3600) ~/ 60;
-        int seconds = durationInSeconds % 60;
-
-        String formattedDuration =
-            '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
-        liveDuration.value = formattedDuration;
-      });
-    } catch (e) {
-      liveDuration.value = "--:--:--"; // 错误时显示 --:--:--
+    void updateDuration() {
+      final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final duration = Duration(seconds: now > start ? now - start : 0);
+      String pad(int value) => value.toString().padLeft(2, '0');
+      liveDuration.value =
+          '${pad(duration.inHours)}:${pad(duration.inMinutes % 60)}:${pad(duration.inSeconds % 60)}';
     }
+
+    updateDuration();
+    _liveDurationTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => updateDuration(),
+    );
   }
 
   @override

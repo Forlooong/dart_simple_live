@@ -21,8 +21,6 @@ class DouyinDanmakuArgs {
     return json.encode({
       "webRid": webRid,
       "roomId": roomId,
-      "userId": userId,
-      "cookie": cookie,
     });
   }
 }
@@ -39,6 +37,10 @@ class DouyinDanmaku extends NativeLiveDanmaku {
   Future start(dynamic args) async {
     if (!await initializeNative() || !nativeActive) return;
     danmakuArgs = args as DouyinDanmakuArgs;
+    final signature = DouyinSign.getSignature(
+      danmakuArgs.roomId,
+      danmakuArgs.userId,
+    );
     var ts = DateTime.now().millisecondsSinceEpoch;
     var uri = Uri.parse(serverUrl).replace(
       scheme: "wss",
@@ -77,14 +79,16 @@ class DouyinDanmaku extends NativeLiveDanmaku {
         "identity": "audience",
         "room_id": danmakuArgs.roomId,
         "heartbeatDuration": "0",
-        //"signature": "00000000"
+        "signature": signature,
       },
     );
 
-    var sign = DouyinSign.getSignature(danmakuArgs.roomId, danmakuArgs.userId);
-
-    var url = "$uri&signature=$sign";
-    var backupUrl = url.replaceAll("webcast3-ws-web-lq", "webcast5-ws-web-lf");
+    final url = uri.toString();
+    final backupUrl = uri
+        .replace(
+          host: uri.host.replaceFirst("webcast3-ws-web-lq", "webcast5-ws-web-lf"),
+        )
+        .toString();
     webScoketUtils = WebScoketUtils(
       url: url,
       backupUrl: backupUrl,

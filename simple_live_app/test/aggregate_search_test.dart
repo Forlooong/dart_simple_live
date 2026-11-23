@@ -15,13 +15,18 @@ class _Site extends LiveSite {
   }
 }
 
-LiveSearchRoomResult _result(String name, {bool more = false}) =>
-    LiveSearchRoomResult(
-      hasMore: more,
-      items: [
-        LiveRoomItem(roomId: '1', title: '直播间', cover: '', userName: name),
-      ],
-    );
+LiveSearchRoomResult _result(
+  String name, {
+  String roomId = '1',
+  bool more = false,
+  CoreError? partialFailure,
+}) => LiveSearchRoomResult(
+  hasMore: more,
+  items: [
+    LiveRoomItem(roomId: roomId, title: '直播间', cover: '', userName: name),
+  ],
+  partialFailure: partialFailure,
+);
 
 void main() {
   test(
@@ -152,8 +157,60 @@ void main() {
       site.pending[('主播', 2)]!.complete(_result('第二页'));
       await paging;
       expect(search.platforms['douyin']!.results['1']!.author, '第二页');
+      final platform = search.platforms['douyin']!;
+      expect(platform.failure, CoreErrorKind.authRequired);
+      expect(platform.retryPage, 1);
+      expect(platform.hasMore, isFalse);
+
+      final retry = search.load('douyin', retry: true);
+      site.pending[('主播', 1)]!.complete(_result('补齐的房间', roomId: '2'));
+      await retry;
+      expect(platform.results.keys, unorderedEquals(['1', '2']));
+      expect(platform.retryPage, isNull);
+      expect(platform.failure, isNull);
     },
   );
+
+  test('retries all partial pages, starting with the earliest', () async {
+    final site = _Site();
+    final search = AggregateSearch({'douyin': site})..setActive(true);
+    addTearDown(search.dispose);
+    search.reset('主播', searchAnchors: false);
+    site.pending[('主播', 1)]!.complete(
+      _result(
+        '第一页',
+        more: true,
+        partialFailure: CoreError('暂不可用', kind: CoreErrorKind.transport),
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    final pageTwo = search.load('douyin');
+    site.pending[('主播', 2)]!.complete(
+      _result(
+        '第二页',
+        roomId: '2',
+        partialFailure: CoreError('需要登录', kind: CoreErrorKind.authRequired),
+      ),
+    );
+    await pageTwo;
+    final platform = search.platforms['douyin']!;
+    expect(platform.retryPage, 1);
+    expect(platform.failure, CoreErrorKind.transport);
+
+    final retryFirst = search.load('douyin', retry: true);
+    site.pending[('主播', 1)]!.complete(_result('第一页', more: true));
+    await retryFirst;
+    expect(platform.retryPage, 2);
+    expect(platform.failure, CoreErrorKind.authRequired);
+
+    final retrySecond = search.load('douyin', retry: true);
+    site.pending[('主播', 2)]!.complete(_result('第二页', roomId: '2'));
+    await retrySecond;
+    expect(platform.retryPage, isNull);
+    expect(platform.failure, isNull);
+    expect(platform.results.keys, unorderedEquals(['1', '2']));
+  });
 
   test('anchor mode keeps profile-only rows for browser opening', () async {
     final site = _AnchorSite();

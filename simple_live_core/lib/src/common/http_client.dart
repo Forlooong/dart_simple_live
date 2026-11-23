@@ -34,21 +34,36 @@ class HttpClient {
     Map<String, dynamic>? header,
     CancelToken? cancel,
   }) async {
+    final response = await getTextResponse(
+      url,
+      queryParameters: queryParameters,
+      header: header,
+      cancel: cancel,
+    );
+    final data = response.data;
+    if (data == null) {
+      throw CoreError('平台响应格式异常', kind: CoreErrorKind.schemaChanged);
+    }
+    return data;
+  }
+
+  Future<Response<String>> getTextResponse(
+    String url, {
+    Map<String, dynamic>? queryParameters,
+    Map<String, dynamic>? header,
+    CancelToken? cancel,
+  }) async {
     try {
       RequestContext.current?.check();
       cancel ??= RequestContext.current?.cancelToken;
       queryParameters ??= {};
       header ??= {};
-      var result = await dio.get(
+      return await dio.get<String>(
         url,
         queryParameters: queryParameters,
-        options: Options(
-          responseType: ResponseType.plain,
-          headers: header,
-        ),
+        options: Options(responseType: ResponseType.plain, headers: header),
         cancelToken: cancel,
       );
-      return result.data;
     } catch (e) {
       if (e is CoreError) rethrow;
       if (e is DioException) throw CoreError.fromDio(e);

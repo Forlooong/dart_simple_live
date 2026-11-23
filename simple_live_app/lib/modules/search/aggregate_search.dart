@@ -1,3 +1,5 @@
+import 'dart:collection';
+
 import 'package:flutter/foundation.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
@@ -22,8 +24,9 @@ class PlatformSearchResults {
   int nextPage = 1;
   bool hasMore = true;
   bool loading = false;
-  CoreErrorKind? failure;
-  int? retryPage;
+  final _failedPages = SplayTreeMap<int, CoreErrorKind>();
+  int? get retryPage => _failedPages.firstKey();
+  CoreErrorKind? get failure => _failedPages[retryPage];
 }
 
 class AggregateSearch extends ChangeNotifier {
@@ -175,8 +178,9 @@ class AggregateSearch extends ChangeNotifier {
         ? 'douyin:direct'
         : 'douyin:rooms';
     final block = _recovery.blocked(recoveryKey, version);
+    final page = retry ? state.retryPage ?? state.nextPage : state.nextPage;
     if (block != null) {
-      state.failure = block;
+      state._failedPages[page] = block;
       notifyListeners();
       return;
     }
@@ -184,10 +188,8 @@ class AggregateSearch extends ChangeNotifier {
     final context = RequestContext(timeout: timeout);
     _requests[id] = context;
     state.loading = true;
-    state.failure = null;
     notifyListeners();
     final term = keyword;
-    final page = retry ? state.retryPage ?? state.nextPage : state.nextPage;
     final searchAnchors = anchors;
     bool current() => !_disposed && identical(_requests[id], context);
     try {
@@ -234,7 +236,7 @@ class AggregateSearch extends ChangeNotifier {
           .timeout(timeout);
       if (!current()) return;
       if (site.statusConfigurationVersion != version) {
-        state.failure = CoreErrorKind.authRequired;
+        state._failedPages[page] = CoreErrorKind.authRequired;
         return;
       }
       for (final item in items) {
@@ -245,18 +247,16 @@ class AggregateSearch extends ChangeNotifier {
         if (partial == null || more) state.nextPage++;
       }
       if (partial == null) {
-        if (state.retryPage == page) state.retryPage = null;
+        state._failedPages.remove(page);
         _recovery.succeeded(recoveryKey);
       } else {
-        state.failure = partial.kind;
-        state.retryPage ??= page;
+        state._failedPages[page] = partial.kind;
       }
     } catch (error) {
       context.cancel();
       if (!current()) return;
       _recovery.failed(recoveryKey, version, error);
-      state.failure = PlatformRecovery.classify(error);
-      state.retryPage ??= page;
+      state._failedPages[page] = PlatformRecovery.classify(error);
     } finally {
       if (current()) {
         _requests.remove(id);

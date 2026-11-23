@@ -206,6 +206,7 @@ LiveRoomDetail _detail({
   dynamic data,
   bool status = true,
   bool isRecord = false,
+  String? showTime,
 }) => LiveRoomDetail(
   roomId: '71415',
   title: 'test',
@@ -215,6 +216,7 @@ LiveRoomDetail _detail({
   online: 1,
   status: status,
   isRecord: isRecord,
+  showTime: showTime,
   url: '',
   data: data,
 );
@@ -247,6 +249,29 @@ void main() {
         );
   });
   tearDown(() => Get.reset());
+
+  testWidgets('room duration is shown immediately when start time is known', (
+    tester,
+  ) async {
+    final room = LiveRoomController(
+      pSite: Site(id: 'douyin', liveSite: _Site(), logo: '', name: 'test'),
+      pRoomId: '123',
+    );
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    try {
+      room.detail.value = _detail(showTime: '${now - 3661}');
+      room.startLiveDurationTimer();
+      expect(room.liveDuration.value, startsWith('01:01:'));
+
+      room.detail.value = _detail();
+      room.startLiveDurationTimer();
+      expect(room.liveDuration.value, '--:--:--');
+    } finally {
+      room.detail.value = null;
+      room.startLiveDurationTimer();
+      room.scrollController.dispose();
+    }
+  });
 
   const loadingKey = ValueKey('playback-refresh-loading');
 
@@ -472,6 +497,21 @@ void main() {
     expect(provider.requests, 1);
     expect(native.opens, hasLength(1));
     expect(room.mediaErrorRetryCount, 0);
+  });
+
+  test('Douyu keeps playing after a short gap in position updates', () async {
+    final provider = _Site();
+    final native = _NativePlayer();
+    await _start(provider, native);
+    native.emitPosition(const Duration(seconds: 30));
+    native.emitError('decoder reported a bad frame');
+
+    await Future<void>.delayed(const Duration(milliseconds: 1200));
+    native.emitPosition(const Duration(seconds: 31));
+    await _settle();
+
+    expect(provider.requests, 1);
+    expect(native.opens, hasLength(1));
   });
 
   test('lifecycle pause waits for an open and close discards queued resume',
