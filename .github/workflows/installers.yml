@@ -494,9 +494,17 @@ jobs:
           dart pub get --enforce-lockfile
           dart build cli --target bin/simple_live_console.dart --output build/cli
           python ../tool/verify_native_bundle.py cli build/cli
-      - name: Restore locked packages
-        run: flutter pub get --enforce-lockfile
       - uses: ./.github/actions/check-native
+      # Windows needs the corrected render-surface dimensions (flutter/flutter#187954).
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: '3.47.9'
+          channel: stable
+          cache: true
+      - name: Restore locked Windows app packages
+        run: |
+          cp pubspec.windows.lock pubspec.lock
+          flutter pub get --enforce-lockfile
       - name: Build Windows release
         run: flutter build windows --release --no-pub
       - name: Load bundled native ABI

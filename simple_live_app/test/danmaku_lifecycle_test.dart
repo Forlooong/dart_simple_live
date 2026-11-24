@@ -279,6 +279,43 @@ void main() {
     });
   });
 
+  testWidgets('decoded chat batches keep updating while the overlay is off',
+      (tester) async {
+    await _withRoom(tester, (controller) async {
+      void receiveBatch(String content) =>
+          controller.liveDanmaku.onMessages!([
+            LiveMessage(
+              type: LiveMessageType.chat,
+              userName: 'viewer',
+              message: content,
+              color: LiveMessageColor.white,
+            ),
+          ]);
+
+      receiveBatch('两处都显示');
+      await tester.pump(const Duration(milliseconds: 60));
+      expect(controller.messages.last.message, '两处都显示');
+      expect(_scrollPainter(tester).scrollDanmakuItems.single.content.text,
+          '两处都显示');
+
+      controller.showDanmakuState.value = false;
+      await tester.pump();
+      receiveBatch('聊天列表继续更新');
+      await tester.pump(const Duration(milliseconds: 60));
+      expect(controller.messages.last.message, '聊天列表继续更新');
+      expect(_scrollPainter(tester).scrollDanmakuItems, isEmpty);
+
+      controller.showDanmakuState.value = true;
+      await tester.pump();
+      receiveBatch('恢复滚动弹幕');
+      await tester.pump(const Duration(milliseconds: 60));
+      expect(controller.messages.last.message, '恢复滚动弹幕');
+      expect(_scrollPainter(tester).scrollDanmakuItems.single.content.text,
+          '恢复滚动弹幕');
+      expect(tester.takeException(), isNull);
+    });
+  });
+
   testWidgets('new chat is painted after returning from the background',
       (tester) async {
     await _withRoom(tester, (controller) async {

@@ -1,9 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:fixnum/fixnum.dart';
+import 'package:simple_live_core/src/common/core_error.dart';
+import 'package:simple_live_core/src/common/request_context.dart';
 import 'package:simple_live_core/src/common/web_socket_util.dart';
+import 'package:simple_live_core/src/danmaku/douyin_danmaku.dart';
 import 'package:simple_live_core/src/danmaku/native_live_danmaku.dart';
 import 'package:simple_live_core/src/danmaku/proto/douyin.pb.dart' as dy;
 import 'package:simple_live_core/src/interface/live_danmaku.dart';
@@ -130,7 +134,135 @@ Uint8List douyinPacket(String message, int logId) {
       .writeToBuffer();
 }
 
+DouyinDanmakuArgs douyinSession(
+  String roomId, {
+  String userId = '7100000000000000222',
+  String cookie = 'ttwid=fixture',
+}) => DouyinDanmakuArgs(
+  webRid: '123',
+  roomId: roomId,
+  userId: userId,
+  cookie: cookie,
+);
+
 void main() {
+  test('Douyin chat survives cancellation of the playback request', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final danmaku = DouyinDanmaku()
+      ..serverUrl = 'ws://127.0.0.1:${server.port}/chat';
+    addTearDown(() async {
+      await danmaku.stop();
+      await server.close(force: true);
+    });
+    server.listen((request) async {
+      final socket = await WebSocketTransformer.upgrade(request);
+      socket.listen((_) {});
+      socket.add(douyinPacket('真实聊天帧的脱敏回放', 1));
+    });
+    final received = <LiveMessage>[];
+    danmaku.onMessages = received.addAll;
+    final playback = RequestContext();
+    late Future<void> starting;
+    await expectLater(
+      playback.run(() async {
+        starting = danmaku.start(douyinSession('7711164227318254351'));
+        playback.cancel();
+      }),
+      throwsA(
+        isA<CoreError>().having(
+          (error) => error.kind,
+          'kind',
+          CoreErrorKind.cancelled,
+        ),
+      ),
+    );
+    await starting;
+    await until(() => received.any((msg) => msg.type == LiveMessageType.chat));
+    expect(received.first.message, '真实聊天帧的脱敏回放');
+  });
+
+  test('Douyin reconnect signs with the refreshed visitor session', () async {
+    const roomId = '7711164227318254351';
+    final fresh = douyinSession(
+      roomId,
+      userId: '7100000000000000333',
+      cookie: 'ttwid=fresh',
+    );
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final attempts = <(String?, String?, bool)>[];
+    final danmaku = DouyinDanmaku(
+      refreshSession: (webRid, id) async {
+        expect(webRid, '123');
+        expect(id, roomId);
+        return fresh;
+      },
+    )..serverUrl = 'ws://127.0.0.1:${server.port}/chat';
+    addTearDown(() async {
+      await danmaku.stop();
+      await server.close(force: true);
+    });
+    server.listen((request) async {
+      final parameters = request.uri.queryParameters;
+      attempts.add((
+        request.headers.value(HttpHeaders.cookieHeader),
+        parameters['user_unique_id'],
+        parameters['signature']?.isNotEmpty ?? false,
+      ));
+      if (attempts.length == 1) {
+        request.response.statusCode = HttpStatus.forbidden;
+        await request.response.close();
+        return;
+      }
+      final socket = await WebSocketTransformer.upgrade(request);
+      socket.listen((_) {});
+      socket.add(douyinPacket('重连收到聊天', 2));
+    });
+    final received = <LiveMessage>[];
+    danmaku.onMessages = received.addAll;
+    await danmaku.start(douyinSession(roomId, cookie: 'ttwid=expired'));
+    await until(() => received.isNotEmpty);
+    expect(attempts, [
+      ('ttwid=expired', '7100000000000000222', true),
+      ('ttwid=fresh', '7100000000000000333', true),
+    ]);
+    expect(received.first.message, '重连收到聊天');
+  });
+
+  test('Douyin room change discards a pending old visitor session', () async {
+    const oldRoom = '7711164227318254351';
+    const newRoom = '7711164227318254352';
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final pending = Completer<DouyinDanmakuArgs>();
+    final requested = Completer<void>();
+    final attempts = <String?>[];
+    final danmaku = DouyinDanmaku(
+      refreshSession: (_, _) {
+        requested.complete();
+        return pending.future;
+      },
+    )..serverUrl = 'ws://127.0.0.1:${server.port}/chat';
+    addTearDown(() async {
+      await danmaku.stop();
+      await server.close(force: true);
+    });
+    server.listen((request) async {
+      attempts.add(request.uri.queryParameters['room_id']);
+      final socket = await WebSocketTransformer.upgrade(request);
+      socket.listen((_) {});
+      socket.add(douyinPacket('新房间聊天', 3));
+    });
+    final received = <LiveMessage>[];
+    danmaku.onMessages = received.addAll;
+    final first = danmaku.start(douyinSession(oldRoom, userId: '', cookie: ''));
+    await requested.future.timeout(const Duration(seconds: 5));
+    await danmaku.start(douyinSession(newRoom));
+    pending.complete(douyinSession(oldRoom));
+    await first;
+    await until(() => received.isNotEmpty);
+    expect(attempts, [newRoom]);
+    expect(received.first.message, '新房间聊天');
+  });
+
   test(
     'stop cancels an initializing session and never opens a late socket',
     () async {
@@ -172,13 +304,13 @@ void main() {
       final harness = Harness(4)..observe();
       addTearDown(harness.stop);
       await harness.start(null);
-    // Drain the initial reset and rule installation first, so the old decode
-    // below is actually in flight when the connection generation changes.
-    harness.decodeMessage(douyinPacket('warm up', 0));
-    await until(() => harness.received.length == 2);
-    harness.received.clear();
-    harness.trace.clear();
-    harness.socket.sent.clear();
+      // Drain the initial reset and rule installation first, so the old decode
+      // below is actually in flight when the connection generation changes.
+      harness.decodeMessage(douyinPacket('warm up', 0));
+      await until(() => harness.received.length == 2);
+      harness.received.clear();
+      harness.trace.clear();
+      harness.socket.sent.clear();
       harness.decodeMessage(douyinPacket('old', 1));
       harness.connectionReady();
       harness.decodeMessage(douyinPacket('new', 2));

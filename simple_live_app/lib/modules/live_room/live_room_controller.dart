@@ -687,6 +687,14 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       followed.value = DBService.instance.getFollowExist("${site.id}_$roomId");
       online.value = detail.value!.online;
       liveStatus.value = detail.value!.status || detail.value!.isRecord;
+      if (detail.value!.isRecord) {
+        addSysMsg("当前主播未开播，正在轮播录像");
+      }
+      addSysMsg("开始连接弹幕服务器");
+      initDanmau();
+      unawaited(_startDanmaku(generation, detail.value?.danmakuData));
+      startLiveDurationTimer(); // 启动开播时长定时器
+
       if (liveStatus.value) {
         await getPlayQualites(generation);
       } else {
@@ -697,13 +705,6 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         });
         if (!_isCurrentRoom(generation)) return;
       }
-      if (detail.value!.isRecord) {
-        addSysMsg("当前主播未开播，正在轮播录像");
-      }
-      addSysMsg("开始连接弹幕服务器");
-      initDanmau();
-      unawaited(_startDanmaku(generation, detail.value?.danmakuData));
-      startLiveDurationTimer(); // 启动开播时长定时器
     } catch (e, stack) {
       if (RequestContext.current?.isCancelled ?? false) return;
       if (!_isCurrentRoom(generation)) return;

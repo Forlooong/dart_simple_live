@@ -15,9 +15,14 @@ class WebScoketUtils {
     this.onHeartBeat,
     this.headers,
     this.backupUrl,
+    this.prepareConnection,
   });
   final String url;
   final String? backupUrl;
+  final Future<({String url, Map<String, dynamic> headers})> Function(
+    bool retry,
+  )?
+  prepareConnection;
   final int heartBeatTime;
   final void Function(dynamic)? onMessage;
   final void Function(String)? onClose;
@@ -36,10 +41,16 @@ class WebScoketUtils {
     _explicitlyClosed = false;
     final generation = ++_generation;
     try {
+      final prepare = prepareConnection;
+      final prepared = prepare == null ? null : await prepare(retry);
+      if (_explicitlyClosed || generation != _generation) return;
       final socket = IOWebSocketChannel.connect(
-        retry && backupUrl != null && backupUrl!.isNotEmpty ? backupUrl! : url,
+        prepared?.url ??
+            (retry && backupUrl != null && backupUrl!.isNotEmpty
+                ? backupUrl!
+                : url),
         connectTimeout: const Duration(seconds: 10),
-        headers: headers,
+        headers: prepared?.headers ?? headers,
       );
       webSocket = socket;
       await socket.ready;
