@@ -13,13 +13,16 @@ import 'package:simple_live_app/app/controller/app_settings_controller.dart';
 import 'package:simple_live_app/app/sites.dart';
 import 'package:simple_live_app/main.dart' as app;
 import 'package:simple_live_app/modules/live_room/live_room_controller.dart';
+import 'package:simple_live_app/routes/app_navigation.dart';
 import 'package:simple_live_app/routes/route_path.dart';
+import 'package:simple_live_app/services/local_storage_service.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 
 /// Build this entry point in Release to exercise the actual live page while
 /// tool/test_windows_resize.ps1 resizes the native window. Keep state isolated.
 Future<void> main() async {
   final ready = File(Platform.environment['SIMPLE_LIVE_RESIZE_READY']!);
+  final resized = File('${ready.path}.resized');
   final report = File('${ready.path}.json');
   final state = await ready.parent.createTemp('live-resize-data-');
   final metrics = <String, Object>{'dartErrors': 0, 'frames': 0};
@@ -45,18 +48,22 @@ Future<void> main() async {
     MediaKit.ensureInitialized();
     Hive.init(state.path);
     await app.initServices();
+    // Keep the probe on the home route until it opens the room itself.
+    await LocalStorageService.instance.setValue(
+      LocalStorageService.kFirstRun,
+      false,
+    );
     AppSettingsController.instance.danmuEnable.value = true;
     runApp(const app.MyApp());
     await binding.endOfFrame;
+    await _until(() => Get.currentRoute == RoutePath.kIndex);
+    // Allow the desktop window setup and the initial route transition to finish.
+    await Future<void>.delayed(const Duration(seconds: 1));
 
     final site = Sites.allSites[Constant.kDouyin]!;
+    (site.liveSite as DouyinSite).cookie = '';
     final roomId = Platform.environment['SIMPLE_LIVE_RESIZE_ROOM']!;
-    unawaited(
-      Get.toNamed(
-        '${RoutePath.kLiveRoomDetail}?roomId=$roomId',
-        arguments: site,
-      ),
-    );
+    AppNavigator.toLiveRoomDetail(site: site, roomId: roomId);
     await _until(() => Get.isRegistered<LiveRoomController>());
     final room = Get.find<LiveRoomController>();
     await _until(
@@ -66,10 +73,21 @@ Future<void> main() async {
           room.globalDanmuKey.currentContext != null,
     );
     metrics['playing'] = true;
+    final startingPosition = room.player.state.position;
+    final startingFrames = metrics['frames'] as int;
     publish();
     await ready.writeAsString('ready');
+    await _until(resized.existsSync);
+    await _until(
+      () =>
+          room.player.state.playing &&
+          room.player.state.position > startingPosition &&
+          (metrics['frames'] as int) > startingFrames &&
+          room.globalDanmuKey.currentContext != null,
+    );
+    metrics['playbackAdvanced'] = true;
+    publish();
 
-    final startingPosition = room.player.state.position;
     await _until(() {
       final chat = room.messages
           .where((message) => message.type == LiveMessageType.chat)
@@ -92,7 +110,6 @@ Future<void> main() async {
     room.showDanmakuState.value = true;
     await _until(() => _paintedChat(room).isNotEmpty);
     metrics['chatAfterEnabling'] = true;
-    metrics['playbackAdvanced'] = room.player.state.position > startingPosition;
     publish();
   } catch (error) {
     recordError(error);

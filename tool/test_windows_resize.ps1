@@ -145,6 +145,7 @@ try {
         !$_.responsive -or !$_.captured -or $_.client -ne $_.child -or $_.colors -lt 5
     }) { throw 'The client failed to render after a window transition.' }
     if ($ReadyFile) {
+        Set-Content -LiteralPath "$ReadyFile.resized" -Value 'resized'
         $reportPath = "$ReadyFile.json"
         $report = $null
         $deadline = [DateTime]::UtcNow.AddSeconds(90)
