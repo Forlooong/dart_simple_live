@@ -114,7 +114,7 @@ try {
     $frames = @(& {
         Measure-Frame $window 'startup'
         [void](Send-WindowMessage $window 0x0231) # WM_ENTERSIZEMOVE
-        foreach ($size in @(@(950, 620), @(1150, 800), @(720, 530), @(1000, 680))) {
+        foreach ($size in @(@(602, 470), @(683, 525), @(741, 608), @(796, 562))) {
             if (![SimpleLiveResizeProbe]::SetWindowPos(
                 $window, [IntPtr]::Zero, 0, 0, $size[0], $size[1], 0x16
             )) { throw 'Could not resize the test window.' }
