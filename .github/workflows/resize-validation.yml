@@ -23,4 +23,73 @@ jobs:
         shell: pwsh
         run: |
           ./tool/test_windows_resize.ps1 -Executable "$env:RUNNER_TEMP/resize-check/simple_live_app.exe"
+      - name: Test with actual 125 percent display scale
+        shell: pwsh
+        run: |
+          Add-Type @'
+          using System;
+          using System.Runtime.InteropServices;
+          
+          public static class CloudDisplayScale {
+              [StructLayout(LayoutKind.Sequential)]
+              struct Luid { public uint Low; public int High; }
+              [StructLayout(LayoutKind.Explicit, Size = 72)]
+              struct Path {
+                  [FieldOffset(0)] public Luid Adapter;
+                  [FieldOffset(8)] public uint Source;
+              }
+              [StructLayout(LayoutKind.Sequential)]
+              struct Header { public int Type; public uint Size; public Luid Adapter; public uint Source; }
+              [StructLayout(LayoutKind.Sequential)]
+              struct ScaleInfo { public Header Header; public int Min; public int Current; public int Max; }
+              [StructLayout(LayoutKind.Sequential)]
+              struct ScaleChange { public Header Header; public int Relative; }
+          
+              [DllImport("user32.dll")] static extern int GetDisplayConfigBufferSizes(uint flags, out uint paths, out uint modes);
+              [DllImport("user32.dll")] static extern int QueryDisplayConfig(uint flags, ref uint paths, [Out] Path[] pathInfo, ref uint modes, IntPtr modeInfo, IntPtr topology);
+              [DllImport("user32.dll")] static extern int DisplayConfigGetDeviceInfo(ref ScaleInfo info);
+              [DllImport("user32.dll")] static extern int DisplayConfigSetDeviceInfo(ref ScaleChange info);
+          
+              static Path display;
+              static void Check(int result) {
+                  if (result != 0) throw new System.ComponentModel.Win32Exception(result);
+              }
+              public static int Select125() {
+                  uint paths, modes;
+                  Check(GetDisplayConfigBufferSizes(2, out paths, out modes));
+                  if (paths == 0) throw new InvalidOperationException("No active cloud display");
+                  var values = new Path[paths];
+                  var buffer = Marshal.AllocHGlobal(checked((int)(modes * 64)));
+                  try { Check(QueryDisplayConfig(2, ref paths, values, ref modes, buffer, IntPtr.Zero)); }
+                  finally { Marshal.FreeHGlobal(buffer); }
+                  display = values[0];
+                  var info = new ScaleInfo {
+                      Header = new Header { Type = -3, Size = (uint)Marshal.SizeOf<ScaleInfo>(), Adapter = display.Adapter, Source = display.Source }
+                  };
+                  Check(DisplayConfigGetDeviceInfo(ref info));
+                  // Relative values step through Windows' list beginning at 100%, 125%.
+                  int desired = info.Min + 1;
+                  if (desired > info.Max) throw new InvalidOperationException("Cloud display does not offer 125%");
+                  Set(desired);
+                  return info.Current;
+              }
+              public static void Set(int relative) {
+                  var info = new ScaleChange {
+                      Header = new Header { Type = -4, Size = (uint)Marshal.SizeOf<ScaleChange>(), Adapter = display.Adapter, Source = display.Source },
+                      Relative = relative
+                  };
+                  Check(DisplayConfigSetDeviceInfo(ref info));
+              }
+          }
+          '@
+          $previous = [CloudDisplayScale]::Select125()
+          try {
+            Start-Sleep -Seconds 2
+            $result = @(./tool/test_windows_resize.ps1 -Executable "$env:RUNNER_TEMP/resize-check/simple_live_app.exe")
+            $result | Write-Output
+            $frames = @($result | ConvertFrom-Json)
+            if (!$frames.Count -or ($frames | Where-Object dpi -ne 120)) { throw 'The OS window DPI was not 120.' }
+          } finally {
+            [CloudDisplayScale]::Set($previous)
+          }
 
