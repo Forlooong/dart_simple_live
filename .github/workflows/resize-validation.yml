@@ -8,10 +8,6 @@ jobs:
   windows:
     runs-on: windows-2022
     timeout-minutes: 35
-    strategy:
-      fail-fast: false
-      matrix:
-        flutter: ['3.38.10', '3.47.9']
     defaults:
       run:
         working-directory: simple_live_app
@@ -22,21 +18,32 @@ jobs:
           persist-credentials: false
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
         with:
-          flutter-version: ${{ matrix.flutter }}
+          flutter-version: '3.47.9'
           channel: stable
           cache: true
       - uses: ./.github/actions/setup-native
-      - name: Resolve dependencies and build
+      - name: Build the portable Windows Release bundle from locked packages
         run: |
-          flutter pub get
+          Copy-Item -LiteralPath pubspec.windows.lock -Destination pubspec.lock -Force
+          flutter pub get --enforce-lockfile
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git diff --stat -- pubspec.lock
           flutter build windows --release --no-pub
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python ../tool/verify_native_bundle.py windows build/windows/x64/runner/Release
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: simple-live-windows-${{ matrix.flutter }}
+          name: Simple-Live-Windows-x64-Resize-Test
           path: simple_live_app/build/windows/x64/runner/Release/
-          retention-days: 3
+          retention-days: 14
           if-no-files-found: error
+      - name: Build the live playback resize harness
+        run: flutter build windows --release --no-pub --target integration_test/windows_resize_live.dart
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: Simple-Live-Windows-x64-Live-Probe
+          path: simple_live_app/build/windows/x64/runner/Release/
+          retention-days: 7
+          if-no-files-found: error
+      - name: Verify application chat and playback contracts
+        run: flutter test --no-pub test/danmaku_lifecycle_test.dart test/live_playback_recovery_test.dart
+
