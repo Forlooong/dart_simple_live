@@ -93,7 +93,7 @@ jobs:
               else:
                   raw.rename(output)
           PY
-          gh release download fork-main-1.12.33-build11134-tv-1.7.23-build10628 --pattern "$PREVIOUS" --output "$RUNNER_TEMP/previous.apk"
+          gh release download fork-main-1.12.33-build11134-tv-1.7.23-build10628 --repo "$GITHUB_REPOSITORY" --pattern "$PREVIOUS" --output "$RUNNER_TEMP/previous.apk"
       - name: Install previous version, upgrade in place and launch the signed candidate
         shell: bash
         run: |
