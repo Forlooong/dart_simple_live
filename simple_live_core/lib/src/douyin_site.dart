@@ -49,7 +49,7 @@ class DouyinSite extends LiveSite {
   String name = "抖音直播";
 
   @override
-  LiveDanmaku getDanmaku() => DouyinDanmaku();
+  LiveDanmaku getDanmaku() => DouyinDanmaku(refreshSession: _getChatSession);
 
   /// 使用 QQBrowser User-Agent（参考 DouyinLiveRecorder）
   static const String kDefaultUserAgent =
@@ -552,9 +552,7 @@ class DouyinSite extends LiveSite {
     }
 
     var roomStatus = status == 2;
-    final chat = roomStatus
-        ? await _getChatSession(webRid, roomId)
-        : _chatArgs(webRid, roomId, const {}, '');
+    final chat = roomStatus ? await _getChatSession(webRid, roomId) : null;
 
     return LiveRoomDetail(
       roomId: webRid,
@@ -628,7 +626,7 @@ class DouyinSite extends LiveSite {
             _resolveStartTime(roomData, roomId),
             _getChatSession(webRid, roomId),
           ).wait
-        : (null, _chatArgs(webRid, roomId, const {}, ''));
+        : (null, null);
     return LiveRoomDetail(
       roomId: webRid,
       title: roomData["title"].toString(),
@@ -684,7 +682,9 @@ class DouyinSite extends LiveSite {
       introduction: owner?["signature"]?.toString() ?? "",
       notice: "",
       showTime: showTime,
-      danmakuData: _chatArgs(webRid, roomId, roomData, sessionCookie),
+      danmakuData: roomStatus
+          ? _chatArgs(webRid, roomId, roomData, sessionCookie)
+          : null,
       data: roomStatus ? room["stream_url"] : {},
     );
   }
@@ -757,17 +757,21 @@ class DouyinSite extends LiveSite {
     Map state,
     String sessionCookie,
   ) {
+    final roomStore = _searchMap(state['roomStore']);
+    final room = _searchMap(_searchMap(roomStore?['roomInfo'])?['room']);
+    final pageRoomId = _searchText(room?['id_str'] ?? room?['id']);
     final user = _searchMap(state['userStore']);
     final visitor = _searchText(_searchMap(user?['odin'])?['user_unique_id']);
+    final matchingSession =
+        roomId.isNotEmpty &&
+        pageRoomId == roomId &&
+        RegExp(r'^\d{17,20}$').hasMatch(visitor) &&
+        sessionCookie.isNotEmpty;
     return DouyinDanmakuArgs(
       webRid: webRid,
       roomId: roomId,
-      userId: visitor.isEmpty ? generateRandomNumber(12).toString() : visitor,
-      cookie: sessionCookie.isNotEmpty
-          ? sessionCookie
-          : cookie.isNotEmpty
-          ? cookie
-          : kDefaultCookie,
+      userId: matchingSession ? visitor : '',
+      cookie: matchingSession ? sessionCookie : '',
     );
   }
 
