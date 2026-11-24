@@ -53,6 +53,7 @@ jobs:
           manager=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | sort -V | tail -1)
           test -n "$manager"
           export PATH="$ANDROID_HOME/platform-tools:$(dirname "$manager"):$PATH"
+          printf '%s\n' "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
           set +o pipefail
           yes | "$manager" --licenses >/dev/null
           set -o pipefail
