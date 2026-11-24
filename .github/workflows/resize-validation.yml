@@ -1,0 +1,42 @@
+name: Windows resize comparison
+on:
+  push:
+    branches: [codex/windows-resize-validation]
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        flutter: ['3.38.10', '3.47.9']
+    defaults:
+      run:
+        working-directory: simple_live_app
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          flutter-version: ${{ matrix.flutter }}
+          channel: stable
+          cache: true
+      - uses: ./.github/actions/setup-native
+      - name: Resolve dependencies and build
+        run: |
+          flutter pub get
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git diff --stat -- pubspec.lock
+          flutter build windows --release --no-pub
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python ../tool/verify_native_bundle.py windows build/windows/x64/runner/Release
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: simple-live-windows-${{ matrix.flutter }}
+          path: simple_live_app/build/windows/x64/runner/Release/
+          retention-days: 3
+          if-no-files-found: error
