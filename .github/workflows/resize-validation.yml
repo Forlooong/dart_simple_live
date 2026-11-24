@@ -1,4 +1,4 @@
-name: Android TV official upgrade smoke
+name: TV installer 16 KiB compatibility
 on:
   push:
     branches: [codex/windows-resize-validation]
@@ -15,7 +15,16 @@ jobs:
       matrix:
         include:
           - target: Android TV 16 KiB
+            gpu: swiftshader
             image: system-images;android-36;google-tv-ps16k;x86_64
+            pages: 16384
+            apk: Simple-Live-1.7.24+10629-r17.1-0c97014-Android-TV-x64-ReleaseSigned.apk
+            previous: Simple-Live-1.7.23+10628-r16.1-c614392-Android-TV-x64-ReleaseSigned.apk
+            package: com.xycz.simple_live_tv
+            version: 1.7.24
+          - target: TV APK on Android 16 KiB
+            gpu: swiftshader_indirect
+            image: system-images;android-35;google_apis_ps16k;x86_64
             pages: 16384
             apk: Simple-Live-1.7.24+10629-r17.1-0c97014-Android-TV-x64-ReleaseSigned.apk
             previous: Simple-Live-1.7.23+10628-r16.1-c614392-Android-TV-x64-ReleaseSigned.apk
@@ -25,6 +34,7 @@ jobs:
       SOURCE_SHA: 0c9701473b35448db0bc145d0cbf182664bde500
       INSTALLER_RUN: '45372919802'
       IMAGE: ${{ matrix.image }}
+      GPU: ${{ matrix.gpu }}
       PAGE_SIZE: ${{ matrix.pages }}
       APK: ${{ matrix.apk }}
       PREVIOUS: ${{ matrix.previous }}
@@ -43,7 +53,7 @@ jobs:
           if [[ ! -x "$ANDROID_HOME/emulator/emulator" ]]; then timeout 150 "$manager" --install emulator; fi
           timeout 180 "$manager" --channel=3 --install "$IMAGE"
           printf 'no\n' | "$(dirname "$manager")/avdmanager" create avd --name release_smoke --package "$IMAGE" --force
-          nohup "$ANDROID_HOME/emulator/emulator" -avd release_smoke -no-window -no-snapshot -noaudio -no-boot-anim -gpu swiftshader_indirect -memory 3072 > "$RUNNER_TEMP/emulator.log" 2>&1 </dev/null &
+          nohup "$ANDROID_HOME/emulator/emulator" -avd release_smoke -no-window -no-snapshot -noaudio -no-boot-anim -gpu "$GPU" -feature -Vulkan -memory 3072 > "$RUNNER_TEMP/emulator.log" 2>&1 </dev/null &
           if ! timeout 240 bash -c 'adb wait-for-device; until [[ $(adb shell getprop sys.boot_completed | tr -d "\r") = 1 ]]; do sleep 3; done'; then tail -30 "$RUNNER_TEMP/emulator.log"; exit 1; fi
           effective=$(adb shell getconf PAGE_SIZE | tr -d '\r')
           echo "Actual kernel page size $effective"
