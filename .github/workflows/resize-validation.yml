@@ -85,11 +85,12 @@ jobs:
           $previous = [CloudDisplayScale]::Select125()
           try {
             Start-Sleep -Seconds 2
-            $result = @(./tool/test_windows_resize.ps1 -Executable "$env:RUNNER_TEMP/resize-check/simple_live_app.exe")
+            $result = @(./tool/test_windows_resize.ps1 -Executable "$env:RUNNER_TEMP/resize-check/simple_live_app.exe" | ForEach-Object { Write-Host $_; $_ })
             $result | Write-Output
             $frames = @($result | ConvertFrom-Json)
             if (!$frames.Count -or ($frames | Where-Object dpi -ne 120)) { throw 'The OS window DPI was not 120.' }
           } finally {
             [CloudDisplayScale]::Set($previous)
           }
+
 
