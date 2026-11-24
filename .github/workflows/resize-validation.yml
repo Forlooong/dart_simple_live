@@ -1,4 +1,4 @@
-name: Signed installer runtime smoke
+name: Windows release installer runtime smoke
 on:
   push:
     branches: [codex/windows-resize-validation]
@@ -6,115 +6,6 @@ permissions:
   actions: read
   contents: read
 jobs:
-  android-smoke:
-    name: ${{ matrix.target }}
-    runs-on: ubuntu-22.04
-    timeout-minutes: 32
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: Android 4 KiB
-            image: system-images;android-35;google_apis;x86_64
-            pages: 4096
-            apk: Simple-Live-1.12.34+11135-r17.1-0c97014-Android-x64-ReleaseSigned.apk
-            previous: Simple-Live-1.12.33+11134-r16.1-c614392-Android-x64-ReleaseSigned.apk
-            package: com.xycz.simple_live
-            version: 1.12.34
-          - target: Android 16 KiB
-            image: system-images;android-35;google_apis_ps16k;x86_64
-            pages: 16384
-            apk: Simple-Live-1.12.34+11135-r17.1-0c97014-Android-x64-ReleaseSigned.apk
-            previous: Simple-Live-1.12.33+11134-r16.1-c614392-Android-x64-ReleaseSigned.apk
-            package: com.xycz.simple_live
-            version: 1.12.34
-          - target: Android TV 16 KiB
-            image: system-images;android-36;google-tv-ps16k;x86_64
-            pages: 16384
-            apk: Simple-Live-1.7.24+10629-r17.1-0c97014-Android-TV-x64-ReleaseSigned.apk
-            previous: Simple-Live-1.7.23+10628-r16.1-c614392-Android-TV-x64-ReleaseSigned.apk
-            package: com.xycz.simple_live_tv
-            version: 1.7.24
-    env:
-      SOURCE_SHA: 0c9701473b35448db0bc145d0cbf182664bde500
-      INSTALLER_RUN: '45372919802'
-      IMAGE: ${{ matrix.image }}
-      PAGE_SIZE: ${{ matrix.pages }}
-      APK: ${{ matrix.apk }}
-      PREVIOUS: ${{ matrix.previous }}
-      PACKAGE: ${{ matrix.package }}
-      VERSION: ${{ matrix.version }}
-    steps:
-      - name: Start disposable emulator at the target page size
-        shell: bash
-        run: |
-          test -e /dev/kvm
-          sudo chmod a+rw /dev/kvm
-          manager=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | sort -V | tail -1)
-          test -n "$manager"
-          export PATH="$ANDROID_HOME/platform-tools:$(dirname "$manager"):$PATH"
-          printf '%s\n' "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
-          set +o pipefail
-          yes | "$manager" --licenses >/dev/null
-          set -o pipefail
-          "$manager" --install emulator
-          "$manager" --channel=3 --install "$IMAGE"
-          printf 'no\n' | "$(dirname "$manager")/avdmanager" create avd --name release_smoke --package "$IMAGE" --force
-          nohup "$ANDROID_HOME/emulator/emulator" -avd release_smoke -no-window -no-snapshot -noaudio -no-boot-anim -gpu swiftshader_indirect -memory 3072 > "$RUNNER_TEMP/emulator.log" 2>&1 </dev/null &
-          if ! timeout 240 bash -c 'adb wait-for-device; until [[ $(adb shell getprop sys.boot_completed | tr -d "\r") = 1 ]]; do sleep 3; done'; then tail -30 "$RUNNER_TEMP/emulator.log"; exit 1; fi
-          effective=$(adb shell getconf PAGE_SIZE | tr -d '\r')
-          echo "Actual kernel page size $effective"
-          test "$effective" = "$PAGE_SIZE"
-          adb shell input keyevent KEYCODE_WAKEUP
-          adb shell wm dismiss-keyguard
-      - name: Obtain exact signed APK and previous stable installer
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          for retry in $(seq 1 75); do
-            result=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$INSTALLER_RUN/artifacts" --jq ".artifacts[] | select(.name == \"$APK\" and .expired == false and .workflow_run.head_sha == \"$SOURCE_SHA\") | [.id,.digest] | @tsv")
-            if [[ -n "$result" ]]; then break; fi
-            sleep 10
-          done
-          read -r artifact digest <<<"$result"
-          [[ "$artifact" =~ ^[0-9]+$ && "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
-          curl --fail --silent --show-error --location --header "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact/zip" -o "$RUNNER_TEMP/candidate.download"
-          printf '%s  %s\n' "${digest#sha256:}" "$RUNNER_TEMP/candidate.download" | sha256sum -c -
-          python - <<'PY'
-          import os, shutil, zipfile
-          from pathlib import Path
-          root = Path(os.environ['RUNNER_TEMP'])
-          raw = root / 'candidate.download'
-          output = root / 'candidate.apk'
-          with zipfile.ZipFile(raw) as archive:
-              if archive.namelist() == [os.environ['APK']]:
-                  with archive.open(os.environ['APK']) as source, output.open('wb') as destination:
-                      shutil.copyfileobj(source, destination)
-              else:
-                  raw.rename(output)
-          PY
-          gh release download fork-main-1.12.33-build11134-tv-1.7.23-build10628 --repo "$GITHUB_REPOSITORY" --pattern "$PREVIOUS" --output "$RUNNER_TEMP/previous.apk"
-      - name: Install previous version, upgrade in place and launch the signed candidate
-        shell: bash
-        run: |
-          activity="$PACKAGE/.MainActivity"
-          adb install "$RUNNER_TEMP/previous.apk"
-          adb shell am start -W -n "$activity"
-          adb install -r "$RUNNER_TEMP/candidate.apk"
-          adb shell dumpsys package "$PACKAGE" | tr -d '\r' | grep -F "versionName=$VERSION"
-          adb shell am force-stop "$PACKAGE"
-          adb logcat -b crash -c
-          for cycle in 1 2; do
-            adb shell am start -W -n "$activity" | tee "$RUNNER_TEMP/launch-$cycle.txt"
-            grep -F 'Status: ok' "$RUNNER_TEMP/launch-$cycle.txt"
-            sleep 12
-            adb shell pidof "$PACKAGE"
-            adb shell am force-stop "$PACKAGE"
-          done
-          adb logcat -b crash -d | tee "$RUNNER_TEMP/crash-summary.txt"
-          if grep -F "Process: $PACKAGE" "$RUNNER_TEMP/crash-summary.txt"; then exit 1; fi
-          printf 'Verified signed x64 in-place installer upgrade and cold launches at %s-byte pages.\n' "$PAGE_SIZE" >> "$GITHUB_STEP_SUMMARY"
   windows-smoke:
     name: Windows installer rendering smoke
     runs-on: windows-2022
@@ -129,7 +20,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $expected='Simple-Live-1.12.34+11135-r17.1-0c97014-Windows-x64-Unsigned'
+          $expected='Simple-Live-1.12.34+11135-r17.1-0c97014-Windows-x64-Setup-Unsigned.exe'
           do {
             $end = if ($end) { $end } else { [DateTime]::UtcNow.AddMinutes(15) }
             $document = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/45372919802/artifacts"
