@@ -1,4 +1,4 @@
-name: TV installer 16 KiB compatibility
+name: Signed installer runtime smoke
 on:
   push:
     branches: [codex/windows-resize-validation]
@@ -14,27 +14,31 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: Android TV 16 KiB
-            gpu: swiftshader
-            image: system-images;android-36;google-tv-ps16k;x86_64
-            pages: 16384
-            apk: Simple-Live-1.7.24+10629-r17.1-0c97014-Android-TV-x64-ReleaseSigned.apk
-            previous: Simple-Live-1.7.23+10628-r16.1-c614392-Android-TV-x64-ReleaseSigned.apk
-            package: com.xycz.simple_live_tv
-            version: 1.7.24
-          - target: TV APK on Android 16 KiB
-            gpu: swiftshader_indirect
+          - target: Android 4 KiB
+            image: system-images;android-35;google_apis;x86_64
+            pages: 4096
+            apk: Simple-Live-1.12.35+11136-r18.1-75f6cec-Android-x64-ReleaseSigned.apk
+            previous: Simple-Live-1.12.34+11135-r17.1-0c97014-Android-x64-ReleaseSigned.apk
+            package: com.xycz.simple_live
+            version: 1.12.35
+          - target: Android 16 KiB
             image: system-images;android-35;google_apis_ps16k;x86_64
             pages: 16384
-            apk: Simple-Live-1.7.24+10629-r17.1-0c97014-Android-TV-x64-ReleaseSigned.apk
-            previous: Simple-Live-1.7.23+10628-r16.1-c614392-Android-TV-x64-ReleaseSigned.apk
+            apk: Simple-Live-1.12.35+11136-r18.1-75f6cec-Android-x64-ReleaseSigned.apk
+            previous: Simple-Live-1.12.34+11135-r17.1-0c97014-Android-x64-ReleaseSigned.apk
+            package: com.xycz.simple_live
+            version: 1.12.35
+          - target: Android TV 16 KiB
+            image: system-images;android-36;google-tv-ps16k;x86_64
+            pages: 16384
+            apk: Simple-Live-1.7.25+10630-r18.1-75f6cec-Android-TV-x64-ReleaseSigned.apk
+            previous: Simple-Live-1.7.24+10629-r17.1-0c97014-Android-TV-x64-ReleaseSigned.apk
             package: com.xycz.simple_live_tv
-            version: 1.7.24
+            version: 1.7.25
     env:
-      SOURCE_SHA: 0c9701473b35448db0bc145d0cbf182664bde500
-      INSTALLER_RUN: '45372919802'
+      SOURCE_SHA: 75f6cec32396f33297d686c8f1dd761ac37ac176
+      INSTALLER_RUN: '45527148355'
       IMAGE: ${{ matrix.image }}
-      GPU: ${{ matrix.gpu }}
       PAGE_SIZE: ${{ matrix.pages }}
       APK: ${{ matrix.apk }}
       PREVIOUS: ${{ matrix.previous }}
@@ -50,10 +54,13 @@ jobs:
           test -n "$manager"
           export PATH="$ANDROID_HOME/platform-tools:$(dirname "$manager"):$PATH"
           printf '%s\n' "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
-          if [[ ! -x "$ANDROID_HOME/emulator/emulator" ]]; then timeout 150 "$manager" --install emulator; fi
-          timeout 180 "$manager" --channel=3 --install "$IMAGE"
+          set +o pipefail
+          yes | "$manager" --licenses >/dev/null
+          set -o pipefail
+          "$manager" --install emulator
+          "$manager" --channel=3 --install "$IMAGE"
           printf 'no\n' | "$(dirname "$manager")/avdmanager" create avd --name release_smoke --package "$IMAGE" --force
-          nohup "$ANDROID_HOME/emulator/emulator" -avd release_smoke -no-window -no-snapshot -noaudio -no-boot-anim -gpu "$GPU" -feature -Vulkan -memory 3072 > "$RUNNER_TEMP/emulator.log" 2>&1 </dev/null &
+          nohup "$ANDROID_HOME/emulator/emulator" -avd release_smoke -no-window -no-snapshot -noaudio -no-boot-anim -gpu swiftshader_indirect -memory 3072 > "$RUNNER_TEMP/emulator.log" 2>&1 </dev/null &
           if ! timeout 240 bash -c 'adb wait-for-device; until [[ $(adb shell getprop sys.boot_completed | tr -d "\r") = 1 ]]; do sleep 3; done'; then tail -30 "$RUNNER_TEMP/emulator.log"; exit 1; fi
           effective=$(adb shell getconf PAGE_SIZE | tr -d '\r')
           echo "Actual kernel page size $effective"
@@ -65,7 +72,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for retry in $(seq 1 75); do
+          for retry in $(seq 1 120); do
             result=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$INSTALLER_RUN/artifacts" --jq ".artifacts[] | select(.name == \"$APK\" and .expired == false and .workflow_run.head_sha == \"$SOURCE_SHA\") | [.id,.digest] | @tsv")
             if [[ -n "$result" ]]; then break; fi
             sleep 10
@@ -87,7 +94,7 @@ jobs:
               else:
                   raw.rename(output)
           PY
-          gh release download fork-main-1.12.33-build11134-tv-1.7.23-build10628 --repo "$GITHUB_REPOSITORY" --pattern "$PREVIOUS" --output "$RUNNER_TEMP/previous.apk"
+          gh release download fork-main-1.12.34-build11135-tv-1.7.24-build10629 --repo "$GITHUB_REPOSITORY" --pattern "$PREVIOUS" --output "$RUNNER_TEMP/previous.apk"
       - name: Install previous version, upgrade in place and launch the signed candidate
         shell: bash
         run: |
@@ -108,4 +115,106 @@ jobs:
           adb logcat -b crash -d | tee "$RUNNER_TEMP/crash-summary.txt"
           if grep -F "Process: $PACKAGE" "$RUNNER_TEMP/crash-summary.txt"; then exit 1; fi
           printf 'Verified signed x64 in-place installer upgrade and cold launches at %s-byte pages.\n' "$PAGE_SIZE" >> "$GITHUB_STEP_SUMMARY"
+  windows-smoke:
+    name: Windows installer rendering smoke
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 75f6cec32396f33297d686c8f1dd761ac37ac176
+          persist-credentials: false
+      - name: Install the exact prepared Windows candidate on the disposable runner
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $expected='Simple-Live-1.12.35+11136-r18.1-75f6cec-Windows-x64-Setup-Unsigned.exe'
+          do {
+            $end = if ($end) { $end } else { [DateTime]::UtcNow.AddMinutes(22) }
+            $document = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/45527148355/artifacts"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $one = ($document | ConvertFrom-Json).artifacts | Where-Object { $_.name -eq $expected -and !$_.expired }
+            if (!$one) { Start-Sleep -Seconds 12 }
+          } until ($one -or [DateTime]::UtcNow -gt $end)
+          if (!$one -or $one.workflow_run.head_sha -ne '75f6cec32396f33297d686c8f1dd761ac37ac176') { throw 'Matching installer was not produced' }
+          $raw = "$env:RUNNER_TEMP/candidate.exe"
+          $headers = @{Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json'}
+          Invoke-WebRequest -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/artifacts/$($one.id)/zip" -Headers $headers -OutFile $raw
+          if ($one.digest -ne "sha256:$((Get-FileHash $raw -Algorithm SHA256).Hash.ToLowerInvariant())") { throw 'Installer digest mismatch' }
+          $dest = "$env:RUNNER_TEMP/installed-release"
+          $process = Start-Process -FilePath $raw -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', ('/DIR="' + $dest + '"')) -WindowStyle Hidden -PassThru -Wait
+          if ($process.ExitCode -ne 0) { throw "Installer exited $($process.ExitCode)" }
+      - name: Test at runner default display scale
+        shell: pwsh
+        run: ./tool/test_windows_resize.ps1 -Executable "$env:RUNNER_TEMP/installed-release/simple_live_app.exe"
+      - name: Test with actual 125 percent display scale
+        shell: pwsh
+        run: |
+          Add-Type @'
+          using System;
+          using System.Runtime.InteropServices;
+          
+          public static class CloudDisplayScale {
+              [StructLayout(LayoutKind.Sequential)]
+              struct Luid { public uint Low; public int High; }
+              [StructLayout(LayoutKind.Explicit, Size = 72)]
+              struct Path {
+                  [FieldOffset(0)] public Luid Adapter;
+                  [FieldOffset(8)] public uint Source;
+              }
+              [StructLayout(LayoutKind.Sequential)]
+              struct Header { public int Type; public uint Size; public Luid Adapter; public uint Source; }
+              [StructLayout(LayoutKind.Sequential)]
+              struct ScaleInfo { public Header Header; public int Min; public int Current; public int Max; }
+              [StructLayout(LayoutKind.Sequential)]
+              struct ScaleChange { public Header Header; public int Relative; }
+          
+              [DllImport("user32.dll")] static extern int GetDisplayConfigBufferSizes(uint flags, out uint paths, out uint modes);
+              [DllImport("user32.dll")] static extern int QueryDisplayConfig(uint flags, ref uint paths, [Out] Path[] pathInfo, ref uint modes, IntPtr modeInfo, IntPtr topology);
+              [DllImport("user32.dll")] static extern int DisplayConfigGetDeviceInfo(ref ScaleInfo info);
+              [DllImport("user32.dll")] static extern int DisplayConfigSetDeviceInfo(ref ScaleChange info);
+          
+              static Path display;
+              static void Check(int result) {
+                  if (result != 0) throw new System.ComponentModel.Win32Exception(result);
+              }
+              public static int Select125() {
+                  uint paths, modes;
+                  Check(GetDisplayConfigBufferSizes(2, out paths, out modes));
+                  if (paths == 0) throw new InvalidOperationException("No active cloud display");
+                  var values = new Path[paths];
+                  var buffer = Marshal.AllocHGlobal(checked((int)(modes * 64)));
+                  try { Check(QueryDisplayConfig(2, ref paths, values, ref modes, buffer, IntPtr.Zero)); }
+                  finally { Marshal.FreeHGlobal(buffer); }
+                  display = values[0];
+                  var info = new ScaleInfo {
+                      Header = new Header { Type = -3, Size = (uint)Marshal.SizeOf<ScaleInfo>(), Adapter = display.Adapter, Source = display.Source }
+                  };
+                  Check(DisplayConfigGetDeviceInfo(ref info));
+                  // Relative values step through Windows' list beginning at 100%, 125%.
+                  int desired = info.Min + 1;
+                  if (desired > info.Max) throw new InvalidOperationException("Cloud display does not offer 125%");
+                  Set(desired);
+                  return info.Current;
+              }
+              public static void Set(int relative) {
+                  var info = new ScaleChange {
+                      Header = new Header { Type = -4, Size = (uint)Marshal.SizeOf<ScaleChange>(), Adapter = display.Adapter, Source = display.Source },
+                      Relative = relative
+                  };
+                  Check(DisplayConfigSetDeviceInfo(ref info));
+              }
+          }
+          '@
+          $previous = [CloudDisplayScale]::Select125()
+          try {
+            Start-Sleep -Seconds 2
+            $result = @(./tool/test_windows_resize.ps1 -Executable "$env:RUNNER_TEMP/installed-release/simple_live_app.exe" | ForEach-Object { Write-Host $_; $_ })
+            $result | Write-Output
+            $frames = @($result | ConvertFrom-Json)
+            if (!$frames.Count -or ($frames | Where-Object dpi -ne 120)) { throw 'The OS window DPI was not 120.' }
+          } finally {
+            [CloudDisplayScale]::Set($previous)
+          }
 
