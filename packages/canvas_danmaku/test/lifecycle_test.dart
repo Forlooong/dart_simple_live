@@ -4,6 +4,44 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('mount and restore the overlay while visible without focus',
+      (tester) async {
+    late DanmakuController controller;
+    final binding = tester.binding;
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pumpWidget(MaterialApp(
+      home: DanmakuScreen(
+        option: DanmakuOption(),
+        createdController: (value) => controller = value,
+      ),
+    ));
+
+    controller.addDanmaku(DanmakuContentItem('visible'));
+    await tester.pump();
+    List<String> painted() => tester
+        .widgetList<CustomPaint>(find.byType(CustomPaint))
+        .map((widget) => widget.painter)
+        .whereType<ScrollDanmakuPainter>()
+        .single
+        .scrollDanmakuItems
+        .where((item) => item.lastDrawTick != null)
+        .map((item) => item.content.text)
+        .toList();
+    expect(painted(), ['visible']);
+
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    controller.addDanmaku(DanmakuContentItem('hidden'));
+    await tester.pump();
+    expect(painted(), isEmpty);
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    controller.addDanmaku(DanmakuContentItem('visible again'));
+    await tester.pump();
+    expect(painted(), ['visible again']);
+    binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('empty, hidden and disposed overlays schedule no work',
       (tester) async {
     late DanmakuController controller;

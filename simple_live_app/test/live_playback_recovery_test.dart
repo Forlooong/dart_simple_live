@@ -138,7 +138,12 @@ class _NativePlayer extends PlatformPlayer {
 class _Room extends LiveRoomController {
   _Room(_Site provider, this.native)
     : super(
-        pSite: Site(id: 'douyu', liveSite: provider, logo: '', name: 'test'),
+        pSite: Site(
+          id: provider is _DouyinRecoveryProvider ? 'douyin' : 'douyu',
+          liveSite: provider,
+          logo: '',
+          name: 'test',
+        ),
         pRoomId: '71415',
       );
 
@@ -169,7 +174,9 @@ class _Room extends LiveRoomController {
   void getSuperChatMessage() {}
 
   @override
-  void initDanmau() {}
+  void initDanmau() {
+    if (site.id == 'douyin') super.initDanmau();
+  }
 
   @override
   void startLiveDurationTimer() {}
@@ -207,6 +214,7 @@ LiveRoomDetail _detail({
   bool status = true,
   bool isRecord = false,
   String? showTime,
+  Object? danmakuData,
 }) => LiveRoomDetail(
   roomId: '71415',
   title: 'test',
@@ -217,6 +225,7 @@ LiveRoomDetail _detail({
   status: status,
   isRecord: isRecord,
   showTime: showTime,
+  danmakuData: danmakuData,
   url: '',
   data: data,
 );
@@ -234,6 +243,42 @@ Future<_Room> _start(_Site provider, _NativePlayer native) async {
     room.scrollController.dispose();
   });
   return room;
+}
+
+
+const _previousBroadcast = '7711164227318254351';
+const _currentBroadcast = '7711164227318254352';
+
+DouyinDanmakuArgs _args(String id) => DouyinDanmakuArgs(
+  roomId: id, webRid: '71415', userId: '7100000000000000222', cookie: 'ttwid=fixture',
+);
+
+class _RecordingChat extends LiveDanmaku {
+  final started = <String>[];
+  int stops = 0;
+
+  @override
+  Future<void> stop() async => stops++;
+  @override
+  Future<void> start(dynamic data) async {
+    started.add((data as DouyinDanmakuArgs).roomId);
+  }
+}
+class _DouyinRecoveryProvider extends _Site {
+  final chat = _RecordingChat();
+  String broadcast = _currentBroadcast;
+  @override
+  LiveDanmaku getDanmaku() => chat;
+
+  @override
+  Future<LiveRoomDetail> getRoomDetail({required String roomId}) async {
+    detailRequests++;
+    return _detail(
+      data: 'new-stream',
+      status: !offline,
+      danmakuData: offline ? null : _args(broadcast),
+    );
+  }
 }
 
 void main() {
@@ -438,6 +483,90 @@ void main() {
 
     expect(native.opens.single, isA<Media>(),
         reason: 'EOF must not independently start the next CDN in libmpv');
+  });
+
+  Future<_Room> openDouyin(_DouyinRecoveryProvider provider, _NativePlayer native) async {
+    final room = await _start(provider, native);
+    final args = _args(_previousBroadcast);
+    room.detail.value = _detail(data: 'old-stream', danmakuData: args);
+    room.initDanmau();
+    await room.liveDanmaku.start(args);
+    return room;
+  }
+
+  LiveMessage chat(String text) => LiveMessage(
+        type: LiveMessageType.chat,
+        userName: 'viewer',
+        message: text,
+        color: LiveMessageColor.white,
+      );
+
+  test('Douyin playback recovery switches chat to the new broadcast', () async {
+    final provider = _DouyinRecoveryProvider();
+    final native = _NativePlayer();
+    final room = await openDouyin(provider, native);
+    final oldBatch = provider.chat.onMessages!;
+    oldBatch([chat('already visible')]);
+    await _until(() => room.messages.isNotEmpty);
+
+    provider.nextResponse = Completer<LivePlayUrl>();
+    native.emitCompleted();
+    await _until(() => provider.requests == 2);
+    oldBatch([chat('old unpublished')]);
+    provider.nextResponse!.complete(LivePlayUrl(urls: ['https://fresh.example/live']));
+    await _until(() => native.opens.length == 2);
+
+    expect(provider.chat.started, [_previousBroadcast, _currentBroadcast]);
+    expect(provider.chat.stops, 1);
+    oldBatch([chat('old late')]);
+    provider.chat.onMessages!([chat('new broadcast')]);
+    await _until(() => room.messages.any((m) => m.message == 'new broadcast'));
+    expect(room.messages.map((m) => m.message), ['already visible', 'new broadcast']);
+  });
+
+  test('Douyin same-broadcast playback recovery keeps the chat connection', () async {
+    final provider = _DouyinRecoveryProvider()..broadcast = _previousBroadcast;
+    final native = _NativePlayer();
+    await openDouyin(provider, native);
+    native.emitCompleted();
+    await _until(() => native.opens.length == 2);
+
+    expect(provider.chat.started, [_previousBroadcast]);
+    expect(provider.chat.stops, 0);
+  });
+
+  test('Douyin confirmed offline stops chat and rejects late messages', () async {
+    final provider = _DouyinRecoveryProvider()..offline = true;
+    final native = _NativePlayer();
+    final room = await openDouyin(provider, native);
+    final oldBatch = provider.chat.onMessages!;
+    native.emitCompleted();
+    await _until(() => native.stops == 1);
+    expect(provider.chat.stops, 1);
+    oldBatch([chat('old late')]);
+    await _settle();
+    expect(room.messages, isEmpty);
+  });
+
+  test('switch and close reject callbacks from retired Douyin chat', () async {
+    final provider = _DouyinRecoveryProvider();
+    final native = _NativePlayer();
+    final room = await openDouyin(provider, native);
+    final oldBatch = provider.chat.onMessages!;
+
+    room.resetRoom(room.site, 'next');
+    await _until(() => native.stops == 1);
+    room.initDanmau();
+    final currentBatch = provider.chat.onMessages!;
+    oldBatch([chat('old room')]);
+    currentBatch([chat('current room')]);
+    await _until(() => room.messages.isNotEmpty);
+    expect(room.messages.map((m) => m.message), ['current room']);
+
+    await room.closePlayer();
+    currentBatch([chat('after close')]);
+    expect(provider.chat.stops, 2);
+    expect(room.messages.map((m) => m.message), ['current room']);
   });
 
   test('five-minute EOF refreshes signed URLs and reopens without jump/seek',

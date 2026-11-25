@@ -15,7 +15,7 @@ class _Settings extends AppSettingsController {
   void onInit() {}
 }
 
-LiveRoomDetail _detail({bool live = true, String room = 'a'}) => LiveRoomDetail(
+LiveRoomDetail _detail({bool live = true, String room = 'a', DouyinDanmakuArgs? chat}) => LiveRoomDetail(
   roomId: room,
   title: '',
   cover: '',
@@ -25,7 +25,27 @@ LiveRoomDetail _detail({bool live = true, String room = 'a'}) => LiveRoomDetail(
   status: live,
   url: '',
   data: room,
+  danmakuData: chat,
 );
+
+DouyinDanmakuArgs _chatArgs(String id) => DouyinDanmakuArgs(
+  roomId: id,
+  webRid: 'a',
+  userId: '7100000000000000222',
+  cookie: 'ttwid=fixture',
+);
+
+class _Chat extends LiveDanmaku {
+  final broadcasts = <String>[];
+  int stops = 0;
+
+  @override
+  Future<void> start(dynamic args) async =>
+      broadcasts.add((args as DouyinDanmakuArgs).roomId);
+
+  @override
+  Future<void> stop() async => stops++;
+}
 
 class _Site extends LiveSite {
   final requests = <String>[];
@@ -33,10 +53,16 @@ class _Site extends LiveSite {
   bool offline = false;
   Completer<LivePlayUrl>? urls;
   Completer<List<LivePlayQuality>>? qualities;
+  final chat = _Chat();
+  DouyinDanmakuArgs? nextChat;
+
+  @override
+  LiveDanmaku getDanmaku() => chat;
+
   @override
   Future<LiveRoomDetail> getRoomDetail({required String roomId}) async {
     details++;
-    return _detail(live: !offline, room: '$roomId-$details');
+    return _detail(live: !offline, room: '$roomId-$details', chat: nextChat);
   }
 
   @override
@@ -154,6 +180,29 @@ void main() {
     expect(room.currentQualityInfo.value, 'new');
     expect(native.opens, hasLength(1));
     expect(room.playUrls.single, 'https://example.test/2');
+  });
+
+  test('Douyin TV recovery restarts chat only for a new broadcast', () async {
+    final original = _chatArgs('7711164227318254351');
+    final next = _chatArgs('7711164227318254352');
+    room.detail.value = _detail(chat: original);
+    room.initDanmau();
+    await site.chat.start(original);
+    await room.getPlayUrl();
+
+    site.nextChat = original;
+    native.fail();
+    await _until(() => native.opens.length == 2);
+    expect(site.chat.broadcasts, [original.roomId]);
+    expect(site.chat.stops, 0);
+
+    // A new manual open gives the next terminal event a fresh media owner.
+    await room.getPlayUrl();
+    site.nextChat = next;
+    native.fail();
+    await _until(() => native.opens.length == 4);
+    expect(site.chat.broadcasts, [original.roomId, next.roomId]);
+    expect(site.chat.stops, 1);
   });
 
   test('changing rooms during quality lookup rejects the old result', () async {

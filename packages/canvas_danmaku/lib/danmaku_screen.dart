@@ -11,6 +11,11 @@ import 'models/danmaku_option.dart';
 import '/models/danmaku_content_item.dart';
 import 'dart:math';
 
+bool isDanmakuViewVisible(AppLifecycleState? state) =>
+    state == null ||
+    state == AppLifecycleState.resumed ||
+    state == AppLifecycleState.inactive;
+
 class DanmakuScreen extends StatefulWidget {
   // 创建Screen后返回控制器
   final Function(DanmakuController) createdController;
@@ -92,7 +97,7 @@ class _DanmakuScreenState extends State<DanmakuScreen>
   void initState() {
     super.initState();
     final lifecycle = WidgetsBinding.instance.lifecycleState;
-    _foreground = lifecycle == null || lifecycle == AppLifecycleState.resumed;
+    _foreground = isDanmakuViewVisible(lifecycle);
     _enabled = widget.enabled;
     _running = _enabled && _foreground;
     _option = widget.option;
@@ -131,7 +136,9 @@ class _DanmakuScreenState extends State<DanmakuScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    _foreground = state == AppLifecycleState.resumed;
+    final visible = isDanmakuViewVisible(state);
+    if (_foreground == visible) return;
+    _foreground = visible;
     if (!_foreground) _clearItems();
     _syncRunning();
     if (mounted) setState(() {});

@@ -60,12 +60,18 @@ void main() {
     expect(room.batches.single.first.text, '800');
     expect(room.droppedDanmakuMessages, 800);
 
+    room.didChangeAppLifecycleState(AppLifecycleState.inactive);
+    _receive(room, 'visible without focus');
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(room.batches, hasLength(2));
+    expect(room.batches.last.single.text, 'visible without focus');
+
     _receive(room, 'pending before background');
     room.didChangeAppLifecycleState(AppLifecycleState.paused);
     _receive(room, 'during background');
     await tester.pump(const Duration(seconds: 1));
-    expect(room.batches, hasLength(1));
-    room.didChangeAppLifecycleState(AppLifecycleState.resumed);
+    expect(room.batches, hasLength(2));
+    room.didChangeAppLifecycleState(AppLifecycleState.inactive);
     _receive(room, 'returned');
     await tester.pump(const Duration(milliseconds: 50));
     expect(room.batches.last.map((item) => item.text), ['returned']);

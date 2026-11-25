@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 
-import 'package:canvas_danmaku/models/danmaku_content_item.dart';
+import 'package:canvas_danmaku/canvas_danmaku.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
@@ -120,6 +120,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   bool _closing = false;
   bool _watchRegistered = false;
   bool _danmakuReady = false;
+  int _danmakuGeneration = 0;
   Timer? _messageFlushTimer;
   Timer? _clockTimer;
   Worker? _danmakuVisibilityWorker;
@@ -248,9 +249,14 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   void refreshRoom() {
     //messages.clear();
 
-    liveDanmaku.stop();
+    _stopDanmaku();
 
     loadData();
+  }
+
+  void _stopDanmaku() {
+    ++_danmakuGeneration;
+    unawaited(liveDanmaku.stop());
   }
 
   /// 初始化弹幕接收事件
@@ -264,8 +270,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       }
     });
     final generation = _roomGeneration;
+    final danmakuGeneration = ++_danmakuGeneration;
+    bool isCurrent() =>
+        _isCurrentRoom(generation) && danmakuGeneration == _danmakuGeneration;
     liveDanmaku.onReady = () {
-      if (_closing || generation != _roomGeneration) return;
+      if (!isCurrent()) return;
       if (_danmakuReady) {
         _invalidateMessages();
         unawaited(_updateDanmakuFilter());
@@ -273,16 +282,16 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       _danmakuReady = true;
     };
     liveDanmaku.onMessage = (message) {
-      if (!_closing && generation == _roomGeneration) onWSMessage(message);
+      if (isCurrent()) onWSMessage(message);
     };
     liveDanmaku.onMessages = (batch) {
-      if (_closing || generation != _roomGeneration) return;
+      if (!isCurrent()) return;
       for (final message in batch) {
         onWSMessage(message);
       }
     };
     liveDanmaku.onDiagnostic = (diagnostic) {
-      if (_closing || generation != _roomGeneration) return;
+      if (!isCurrent()) return;
       _reportDanmakuDiagnostic(diagnostic);
     };
     _filterRulesWorker ??= ever<Set<String>>(
@@ -399,6 +408,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       addHistory();
       online.value = detail.value!.online;
       liveStatus.value = detail.value!.status || detail.value!.isRecord;
+      if (site.id == Constant.kDouyin && roomDetail.status) {
+        initDanmau();
+        unawaited(_startDanmaku(generation, roomDetail.danmakuData));
+      }
       if (liveStatus.value) {
         await getPlayQualites(generation);
       } else {
@@ -411,8 +424,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         SmartDialog.showToast("当前主播未开播，正在轮播录像");
       }
 
-      initDanmau();
-      unawaited(_startDanmaku(generation, detail.value?.danmakuData));
+      if (site.id != Constant.kDouyin) {
+        initDanmau();
+        unawaited(_startDanmaku(generation, roomDetail.danmakuData));
+      }
     } catch (e) {
       if (RequestContext.current?.isCancelled ?? false) return;
       if (!_isCurrentRoom(generation)) return;
@@ -426,10 +441,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   }
 
   Future<void> _startDanmaku(int generation, dynamic data) async {
+    final danmakuGeneration = _danmakuGeneration;
     try {
       await liveDanmaku.start(data);
     } catch (error) {
-      if (!_closing && generation == _roomGeneration) {
+      if (_isCurrentRoom(generation) && danmakuGeneration == _danmakuGeneration) {
         Log.logPrint(error);
         _reportDanmakuDiagnostic('弹幕启动失败，请刷新直播间重试：$error');
       }
@@ -704,6 +720,11 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       () => requestedSite.liveSite.getRoomDetail(roomId: roomId),
     );
     if (!_isCurrentPlayback(room, playback)) return false;
+    if (!freshDetail.status && requestedSite.id == Constant.kDouyin) {
+      _stopDanmaku();
+      _invalidateMessages();
+      danmakuController?.clear();
+    }
     if (!freshDetail.status && !freshDetail.isRecord) {
       _recoveryExhausted = true;
       _playlistReady = false;
@@ -739,6 +760,8 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     );
     if (!_isCurrentPlayback(room, playback)) return false;
     if (freshUrls.urls.isEmpty) throw StateError('No live URLs');
+    final previousChat = detail.value?.danmakuData;
+    final nextChat = freshDetail.danmakuData;
     detail.value = freshDetail;
     qualites.value = freshQualities;
     currentQuality = qualityIndex;
@@ -746,6 +769,17 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     playUrls.value = freshUrls.urls;
     playHeaders = freshUrls.headers;
     currentLineIndex = currentLineIndex.clamp(0, playUrls.length - 1);
+    if (freshDetail.status &&
+        nextChat is DouyinDanmakuArgs &&
+        nextChat.roomId.isNotEmpty &&
+        (previousChat is! DouyinDanmakuArgs ||
+            previousChat.roomId != nextChat.roomId)) {
+      _stopDanmaku();
+      _invalidateMessages();
+      danmakuController?.clear();
+      initDanmau();
+      unawaited(_startDanmaku(room, nextChat));
+    }
     return true;
   }
 
@@ -775,6 +809,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
 
   @override
   Future<void> closePlayer() {
+    if (!playerClosing) _stopDanmaku();
     _sourceRequest?.cancel();
     return super.closePlayer();
   }
@@ -850,7 +885,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     _invalidateMessages();
 
     // 清除全部消息
-    liveDanmaku.stop();
+    _stopDanmaku();
 
     danmakuController?.clear();
 
@@ -924,9 +959,10 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     super.didChangeAppLifecycleState(state);
     if (_closing) return;
 
-    if (state != AppLifecycleState.resumed) {
+    final background = !isDanmakuViewVisible(state);
+    if (isBackground == background) return;
+    if (background) {
       Log.d("进入后台");
-      //进入后台，关闭弹幕
       danmakuController?.clear();
       isBackground = true;
       danmakuForeground.value = false;
@@ -934,9 +970,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       _messageFlushTimer?.cancel();
       _messageFlushTimer = null;
       _clearPendingMessages();
-    } else
-    //返回前台
-    if (state == AppLifecycleState.resumed) {
+    } else {
       Log.d("返回前台");
       isBackground = false;
       danmakuForeground.value = true;
@@ -963,7 +997,6 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       FollowUserService.instance.endWatching();
       _watchRegistered = false;
     }
-    liveDanmaku.stop();
     focusNode.dispose();
     danmakuController?.clear();
     danmakuController = null;

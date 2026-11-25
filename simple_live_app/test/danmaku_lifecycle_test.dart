@@ -316,6 +316,35 @@ void main() {
     });
   });
 
+
+  testWidgets('visible Douyin room keeps painting chat after focus loss', (tester) async {
+    final room = LiveRoomController(
+      pSite: Site(id: 'douyin', liveSite: LiveSite(), logo: '', name: 'fixture'),
+      pRoomId: 'room',
+    );
+    await _withRoom(tester, (controller) async {
+      _receive(controller, 'before focus loss');
+      await tester.pump(const Duration(milliseconds: 70));
+      expect(controller.messages.last.message, 'before focus loss');
+      expect(_scrollPainter(tester).scrollDanmakuItems.single.lastDrawTick, isNotNull);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      await tester.pump();
+      controller.liveDanmaku.onMessages!([LiveMessage(
+        type: LiveMessageType.chat,
+        userName: 'fixture',
+        message: 'while visible unfocused',
+        color: LiveMessageColor.white,
+      )]);
+      await tester.pump(const Duration(milliseconds: 70));
+      final listUpdated = controller.messages.any((message) => message.message == 'while visible unfocused');
+      final painted = _scrollPainter(tester).scrollDanmakuItems.any((item) =>
+        item.content.text == 'while visible unfocused' && item.lastDrawTick != null);
+      expect((listUpdated, painted), (true, true),
+        reason: 'An inactive but visible room continues showing incoming chat.');
+    }, room: room);
+  });
+
   testWidgets('new chat is painted after returning from the background',
       (tester) async {
     await _withRoom(tester, (controller) async {
