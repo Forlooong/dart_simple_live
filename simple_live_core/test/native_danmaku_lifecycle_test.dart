@@ -3,8 +3,10 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:dio/dio.dart';
 import 'package:fixnum/fixnum.dart';
 import 'package:simple_live_core/src/common/core_error.dart';
+import 'package:simple_live_core/src/common/http_client.dart' as core_http;
 import 'package:simple_live_core/src/common/request_context.dart';
 import 'package:simple_live_core/src/common/web_socket_util.dart';
 import 'package:simple_live_core/src/danmaku/douyin_danmaku.dart';
@@ -146,6 +148,87 @@ DouyinDanmakuArgs douyinSession(
 );
 
 void main() {
+  late Response<List<int>> Function(RequestOptions) imResponse;
+  setUp(() {
+    imResponse = (request) => Response(
+      requestOptions: request,
+      statusCode: 200,
+      data: utf8.encode('{"error":"fixture"}'),
+    );
+    final interceptors = core_http.HttpClient.instance.dio.interceptors;
+    final fixture = InterceptorsWrapper(
+      onRequest: (request, handler) {
+        if (request.uri.path == '/webcast/im/fetch/') {
+          handler.resolve(imResponse(request));
+        } else {
+          handler.next(request);
+        }
+      },
+    );
+    interceptors.add(fixture);
+    addTearDown(() => interceptors.remove(fixture));
+  });
+
+  test('Douyin receives chat using a server-issued IM context', () async {
+    const roomId = '7711164227318254351';
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final address = 'ws://127.0.0.1:${server.port}';
+    final danmaku = DouyinDanmaku()..serverUrl = '$address/compat';
+    addTearDown(() async {
+      await danmaku.stop();
+      await server.close(force: true);
+    });
+    final preflights = <RequestOptions>[];
+    imResponse = (request) {
+      preflights.add(request);
+      final context = dy.Response()
+        ..liveCursor = 'server-cursor'
+        ..internalExt = 'session=first&cursor=next'
+        ..heartbeatDuration = Int64(2500)
+        ..pushServer = '$address/dynamic';
+      return Response(
+        requestOptions: request,
+        statusCode: 200,
+        data: gzip.encode(context.writeToBuffer()),
+      );
+    };
+    final socketRequest = Completer<Uri>();
+    server.listen((request) async {
+      socketRequest.complete(request.uri);
+      final socket = await WebSocketTransformer.upgrade(request);
+      socket.listen((_) {});
+      if (request.uri.path == '/dynamic' &&
+          request.uri.queryParameters['cursor'] == 'server-cursor') {
+        socket.add(douyinPacket('动态握手收到聊天', 4));
+      }
+    });
+    final received = <LiveMessage>[];
+    danmaku.onMessages = received.addAll;
+    await danmaku.start(
+      douyinSession(roomId, cookie: 'ttwid=fixture; msToken=fixture-token'),
+    );
+    final socket = await socketRequest.future.timeout(
+      const Duration(seconds: 5),
+    );
+    expect(socket.path, '/dynamic');
+    expect(
+      socket.queryParameters,
+      containsPair('internal_ext', 'session=first&cursor=next'),
+    );
+    expect(socket.queryParameters, containsPair('heartbeatDuration', '2500'));
+    final request = preflights.single;
+    expect(request.uri.queryParameters['room_id'], roomId);
+    expect(
+      request.uri.queryParameters['user_unique_id'],
+      '7100000000000000222',
+    );
+    expect(request.uri.queryParameters['msToken'], 'fixture-token');
+    expect(request.uri.queryParameters['a_bogus'], isNotEmpty);
+    expect(request.headers['Cookie'], 'ttwid=fixture; msToken=fixture-token');
+    await until(() => received.isNotEmpty);
+    expect(received.first.message, '动态握手收到聊天');
+  });
+
   test('Douyin chat survives cancellation of the playback request', () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final danmaku = DouyinDanmaku()
@@ -181,6 +264,50 @@ void main() {
     expect(received.first.message, '真实聊天帧的脱敏回放');
   });
 
+  test(
+    'Douyin falls back when the dynamic WebSocket rejects the handshake',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final address = 'ws://127.0.0.1:${server.port}';
+      final danmaku = DouyinDanmaku()..serverUrl = '$address/compat';
+      addTearDown(() async {
+        await danmaku.stop();
+        await server.close(force: true);
+      });
+      var preflights = 0;
+      imResponse = (request) {
+        preflights++;
+        final context = dy.Response()
+          ..cursor = 'server-cursor'
+          ..pushServer = '$address/dynamic';
+        return Response(
+          requestOptions: request,
+          statusCode: 200,
+          data: context.writeToBuffer(),
+        );
+      };
+      final attempts = <String>[];
+      server.listen((request) async {
+        attempts.add(request.uri.path);
+        if (request.uri.path == '/dynamic') {
+          request.response.statusCode = HttpStatus.forbidden;
+          await request.response.close();
+          return;
+        }
+        final socket = await WebSocketTransformer.upgrade(request);
+        socket.listen((_) {});
+        socket.add(douyinPacket('兼容连接收到聊天', 5));
+      });
+      final received = <LiveMessage>[];
+      danmaku.onMessages = received.addAll;
+      await danmaku.start(douyinSession('7711164227318254351'));
+      await until(() => received.isNotEmpty);
+      expect(attempts, ['/dynamic', '/compat']);
+      expect(preflights, 1);
+      expect(received.first.message, '兼容连接收到聊天');
+    },
+  );
+
   test('Douyin reconnect signs with the refreshed visitor session', () async {
     const roomId = '7711164227318254351';
     final fresh = douyinSession(
@@ -190,6 +317,21 @@ void main() {
     );
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final attempts = <(String?, String?, bool)>[];
+    final preflights = <(String?, String?)>[];
+    imResponse = (request) {
+      final visitor = request.uri.queryParameters['user_unique_id'];
+      preflights.add((request.headers['Cookie'] as String?, visitor));
+      final im = dy.Response()
+        ..cursor = 'cursor-$visitor'
+        ..pushServer = visitor == fresh.userId
+            ? 'ws://127.0.0.1:${server.port}/dynamic'
+            : 'wss://webcast3-ws-web-lq.douyin.com.invalid/chat';
+      return Response(
+        requestOptions: request,
+        statusCode: 200,
+        data: im.writeToBuffer(),
+      );
+    };
     final danmaku = DouyinDanmaku(
       refreshSession: (webRid, id) async {
         expect(webRid, '123');
@@ -209,10 +351,14 @@ void main() {
         parameters['signature']?.isNotEmpty ?? false,
       ));
       if (attempts.length == 1) {
+        expect(request.uri.path, '/chat');
+        expect(parameters['cursor'], matches(r'^h-1_t-\d+_r-1_d-1_u-1$'));
         request.response.statusCode = HttpStatus.forbidden;
         await request.response.close();
         return;
       }
+      expect(request.uri.path, '/dynamic');
+      expect(parameters['cursor'], 'cursor-${fresh.userId}');
       final socket = await WebSocketTransformer.upgrade(request);
       socket.listen((_) {});
       socket.add(douyinPacket('重连收到聊天', 2));
@@ -224,6 +370,10 @@ void main() {
     expect(attempts, [
       ('ttwid=expired', '7100000000000000222', true),
       ('ttwid=fresh', '7100000000000000333', true),
+    ]);
+    expect(preflights, [
+      ('ttwid=expired', '7100000000000000222'),
+      ('ttwid=fresh', '7100000000000000333'),
     ]);
     expect(received.first.message, '重连收到聊天');
   });

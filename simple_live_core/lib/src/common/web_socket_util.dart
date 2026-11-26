@@ -19,9 +19,8 @@ class WebScoketUtils {
   });
   final String url;
   final String? backupUrl;
-  final Future<({String url, Map<String, dynamic> headers})> Function(
-    bool retry,
-  )?
+  final Future<({String url, Map<String, dynamic> headers, int? heartbeatTime})>
+  Function(bool retry)?
   prepareConnection;
   final int heartBeatTime;
   final void Function(dynamic)? onMessage;
@@ -72,14 +71,16 @@ class WebScoketUtils {
         },
       );
       onReady?.call();
+      final heartbeatInterval = prepared?.heartbeatTime ?? heartBeatTime;
       if (!_explicitlyClosed &&
           generation == _generation &&
-          heartBeatTime > 0) {
-        heartBeatTimer = Timer.periodic(Duration(milliseconds: heartBeatTime), (
-          _,
-        ) {
-          if (generation == _generation) onHeartBeat?.call();
-        });
+          heartbeatInterval > 0) {
+        heartBeatTimer = Timer.periodic(
+          Duration(milliseconds: heartbeatInterval),
+          (_) {
+            if (generation == _generation) onHeartBeat?.call();
+          },
+        );
       }
     } catch (error) {
       if (!_explicitlyClosed && generation == _generation) _scheduleReconnect();

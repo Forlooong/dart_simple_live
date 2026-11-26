@@ -10648,19 +10648,17 @@ function getMSSDKSignature(msStub, userAgent) {
 ''';
 
   static const String defaultUserAgent = DouyinSite.kDefaultUserAgent;
-  static String getAbogusUrl(String url, String userAgent) {
-    final msToken = generateMsToken(107);
-    var params = ('$url&msToken=$msToken').split('?')[1];
-    var query = params.contains("?") ? params.split("?")[1] : params;
+  static String getAbogusUrl(String url, String userAgent, {String? msToken}) {
+    final token = Uri.encodeComponent(msToken ?? generateMsToken(107));
+    final signedBase = '$url&msToken=$token';
+    final query = Uri.parse(signedBase).query;
     final aBogus = _evaluate(
       kABogus,
       '(query, userAgent) => getABogus(query, userAgent)',
       [query, userAgent],
       maxStackSize: 64 * 1024,
     );
-    var newUrl =
-        '$url&msToken=${Uri.encodeComponent(msToken)}&a_bogus=${Uri.encodeComponent(aBogus)}';
-    return newUrl;
+    return '$signedBase&a_bogus=${Uri.encodeComponent(aBogus)}';
   }
 
   static String getSignature(String roomId, String uniqueId) {
