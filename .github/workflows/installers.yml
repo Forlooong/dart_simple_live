@@ -1,5 +1,5 @@
 name: Build installers
-run-name: "Build all platforms · Main 1.12.38+11139 · TV 1.7.28+10633 · #${{ github.run_number }}"
+run-name: "Build all platforms · Main 1.12.39+11140 · TV 1.7.29+10634 · #${{ github.run_number }}"
 
 on:
   push:
@@ -679,7 +679,7 @@ jobs:
           Architecture: amd64
           Maintainer: Forlooong
           Installed-Size: $installed_size
-          Depends: libc6 (>= 2.35), libstdc++6, libgtk-3-0, libmpv1, libasound2, libsecret-1-0, libjsoncpp25
+          Depends: libc6 (>= 2.35), libstdc++6, libgtk-3-0, libmpv1, libasound2, libsecret-1-0, libjsoncpp25, libgles2
           Description: Simple Live desktop live stream player
            Includes the complete Flutter application and bundled native libraries.
           EOF
