@@ -162,6 +162,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   int? _pendingRetryMediaGeneration;
   bool _recoveryExhausted = false;
   int _consecutiveRecoveryAttempts = 0;
+  final _recoveryWindow = PlaybackRecoveryWindow();
   Duration? _firstPlaybackPosition;
   Duration? _lastPlaybackPosition;
   Timer? _nativeErrorTimer;
@@ -196,6 +197,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     if (cancelSource) _sourceRequest?.cancel();
     _playGeneration++;
     _resetRecovery();
+    _recoveryWindow.reset();
     _playlistReady = false;
     playUrls.clear();
     qualites.clear();
@@ -997,16 +999,23 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
           showPlaybackFailure();
           return;
         }
+        // Give the old stream's error/EOF notifications time to drain before
+        // replacing it, and avoid repeatedly rebuilding the native decoder.
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        if (!_isCurrentPlayback(room, playback)) return;
+        if (detail.value?.isRecord != true && !_recoveryWindow.tryStart()) {
+          _recoveryExhausted = true;
+          errorMsg.value = "直播多次中断，已暂停自动重试，请手动刷新";
+          Log.w("播放恢复已停止：短时间内多次重试");
+          showPlaybackFailure();
+          return;
+        }
         if (mediaErrorRetryCount >= 2) {
           currentLineIndex++;
           mediaErrorRetryCount = 0;
         }
         mediaErrorRetryCount++;
         final attempt = ++_consecutiveRecoveryAttempts;
-        // Give the old stream's error/EOF notifications time to drain before
-        // replacing it, and avoid repeatedly rebuilding the native decoder.
-        await Future<void>.delayed(const Duration(milliseconds: 300));
-        if (!_isCurrentPlayback(room, playback)) return;
         playbackDiagnostics.recoveryAttempt();
         Log.i("播放恢复：第 $attempt 次，重新获取直播地址");
         try {
@@ -1137,7 +1146,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     }
     _lastPlaybackPosition = position;
     // playing=true is emitted before a decoder has produced any frames.
-    // Only advancing media time replenishes the automatic recovery budget.
+    // Advancing media time replenishes only the consecutive retry budget.
     if (position - _firstPlaybackPosition! >= const Duration(seconds: 10)) {
       mediaErrorRetryCount = 0;
       _consecutiveRecoveryAttempts = 0;

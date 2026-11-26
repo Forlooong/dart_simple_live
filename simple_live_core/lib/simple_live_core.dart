@@ -31,6 +31,7 @@ export 'src/model/live_play_url.dart';
 export 'src/common/player_command_queue.dart';
 
 export 'src/common/playback_diagnostics.dart';
+export 'src/common/playback_recovery_window.dart';
 
 export 'src/common/request_context.dart';
 

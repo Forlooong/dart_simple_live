@@ -828,6 +828,33 @@ void main() {
     expect(room.currentLineIndex, 0);
   });
 
+  test('briefly recovered streams cannot reload indefinitely', () async {
+    final provider = _Site();
+    final native = _NativePlayer();
+    final room = await _start(provider, native);
+
+    for (var attempt = 0; attempt < 6; attempt++) {
+      room.mediaPosition(Duration.zero);
+      room.mediaPosition(const Duration(seconds: 11));
+      room.mediaEnd();
+      await _until(() => native.opens.length == attempt + 2);
+    }
+
+    room.mediaPosition(Duration.zero);
+    room.mediaPosition(const Duration(seconds: 11));
+    room.mediaEnd();
+    await _settle();
+    expect(native.opens, hasLength(7));
+    expect(provider.detailRequests, 6);
+    expect(room.failureNotifications, 1);
+    expect(room.liveStatus.value, isTrue);
+
+    await room.refreshFromProvider();
+    expect(native.opens, hasLength(8));
+    room.mediaEnd();
+    await _until(() => native.opens.length == 9);
+  });
+
   test('confirmed offline room stops playback without reopening the URL',
       () async {
     final provider = _Site();

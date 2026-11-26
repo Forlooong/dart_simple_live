@@ -82,10 +82,18 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   int? _pendingRetryMediaGeneration;
   bool _recoveryExhausted = false;
   int _consecutiveRecoveryAttempts = 0;
+  final _recoveryWindow = PlaybackRecoveryWindow();
   Duration? _firstPlaybackPosition;
   Duration? _lastPlaybackPosition;
+  Timer? _nativeErrorTimer;
+
+  void _cancelPendingPlaybackError() {
+    _nativeErrorTimer?.cancel();
+    _nativeErrorTimer = null;
+  }
 
   void _resetRecovery() {
+    _cancelPendingPlaybackError();
     _failedMediaGeneration = null;
     _pendingRetryMediaGeneration = null;
     _recoveryExhausted = false;
@@ -107,6 +115,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
     if (cancelSource) _sourceRequest?.cancel();
     _playGeneration++;
     _resetRecovery();
+    _recoveryWindow.reset();
     _playlistReady = false;
     playUrls.clear();
     qualites.clear();
@@ -569,6 +578,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
       // A failure belongs to one native open, not to the whole room. An old
       // error + EOF pair must not consume another attempt during URL refresh.
       _mediaGeneration++;
+      _cancelPendingPlaybackError();
       _failedMediaGeneration = null;
       _firstPlaybackPosition = null;
       _lastPlaybackPosition = null;
@@ -612,6 +622,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   @override
   void mediaEnd() {
     if (playerClosing || !_playlistReady) return;
+    _cancelPendingPlaybackError();
     playbackDiagnostics.terminal(PlaybackTerminal.eof);
     super.mediaEnd();
     _retryPlayback();
@@ -620,7 +631,32 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   int mediaErrorRetryCount = 0;
   @override
   void mediaError(String error) {
+    if (playerClosing ||
+        !_playlistReady ||
+        _recoveryExhausted ||
+        _nativeErrorTimer != null ||
+        _failedMediaGeneration == _mediaGeneration) {
+      return;
+    }
+    // A Douyu decoder error during buffering can clear on the next frame.
+    final douyuPlaybackInProgress =
+        site.id == Constant.kDouyu &&
+        detail.value?.status == true &&
+        _lastPlaybackPosition != null &&
+        (player.state.playing || player.state.buffering);
+    if (douyuPlaybackInProgress) {
+      _nativeErrorTimer = Timer(
+        const Duration(seconds: 5),
+        () => _confirmPlaybackError(error),
+      );
+      return;
+    }
+    _confirmPlaybackError(error);
+  }
+
+  void _confirmPlaybackError(String error) {
     if (playerClosing || !_playlistReady) return;
+    _cancelPendingPlaybackError();
     playbackDiagnostics.terminal(PlaybackTerminal.error);
     super.mediaError(error);
     _retryPlayback();
@@ -662,16 +698,23 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
           showPlaybackFailure();
           return;
         }
+        // Give the old stream's error/EOF notifications time to drain before
+        // replacing it, and avoid repeatedly rebuilding the native decoder.
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        if (!_isCurrentPlayback(room, playback)) return;
+        if (detail.value?.isRecord != true && !_recoveryWindow.tryStart()) {
+          _recoveryExhausted = true;
+          errorMsg.value = "直播多次中断，已暂停自动重试，请手动刷新";
+          Log.w("播放恢复已停止：短时间内多次重试");
+          showPlaybackFailure();
+          return;
+        }
         if (mediaErrorRetryCount >= 2) {
           currentLineIndex++;
           mediaErrorRetryCount = 0;
         }
         mediaErrorRetryCount++;
         final attempt = ++_consecutiveRecoveryAttempts;
-        // Give the old stream's error/EOF notifications time to drain before
-        // replacing it, and avoid repeatedly rebuilding the native decoder.
-        await Future<void>.delayed(const Duration(milliseconds: 300));
-        if (!_isCurrentPlayback(room, playback)) return;
         playbackDiagnostics.recoveryAttempt();
         Log.i("播放恢复：第 $attempt 次，重新获取直播地址");
         try {
@@ -790,13 +833,15 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
         _failedMediaGeneration == _mediaGeneration) {
       return;
     }
+    final previous = _lastPlaybackPosition;
+    if (previous != null && position > previous) _cancelPendingPlaybackError();
     if (_firstPlaybackPosition == null ||
-        (_lastPlaybackPosition != null && position < _lastPlaybackPosition!)) {
+        (previous != null && position < previous)) {
       _firstPlaybackPosition = position;
     }
     _lastPlaybackPosition = position;
     // playing=true is emitted before a decoder has produced any frames.
-    // Only advancing media time replenishes the automatic recovery budget.
+    // Advancing media time replenishes only the consecutive retry budget.
     if (position - _firstPlaybackPosition! >= const Duration(seconds: 10)) {
       mediaErrorRetryCount = 0;
       _consecutiveRecoveryAttempts = 0;
@@ -810,6 +855,7 @@ class LiveRoomController extends PlayerController with WidgetsBindingObserver {
   @override
   Future<void> closePlayer() {
     if (!playerClosing) _stopDanmaku();
+    _cancelPendingPlaybackError();
     _sourceRequest?.cancel();
     return super.closePlayer();
   }
