@@ -1,0 +1,56 @@
+name: Frozen Windows live playback probe
+on:
+  push:
+    branches: [codex/simple-live-verify-e733362]
+    paths: [.github/workflows/probe-e733362.yml]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: e733362d4052aaae5ea9f5003bf10aff659ca204
+          persist-credentials: false
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          flutter-version: '3.47.9'
+          channel: stable
+      - uses: ./.github/actions/setup-native
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Build and run same-source Release playback and canvas probe
+        shell: pwsh
+        run: |
+          Push-Location simple_live_app
+          try {
+            if ((git rev-parse HEAD) -ne 'e733362d4052aaae5ea9f5003bf10aff659ca204') { throw 'Wrong candidate SHA' }
+            Copy-Item pubspec.windows.lock pubspec.lock
+            flutter pub get --enforce-lockfile
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            flutter build windows --release --no-pub --target integration_test/windows_resize_live.dart
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally { Pop-Location }
+          $rooms = [System.Collections.Generic.List[string]]::new()
+          try {
+            $listing = Invoke-WebRequest -Uri 'https://live.douyin.com/category/3_10001' -TimeoutSec 30
+            foreach ($match in [regex]::Matches($listing.Content,'https://live\.douyin\.com/([0-9]{6,18})(?![0-9])')) {
+              if (!$rooms.Contains($match.Groups[1].Value)) { $rooms.Add($match.Groups[1].Value) }
+              if ($rooms.Count -ge 3) { break }
+            }
+          } catch { Write-Host 'Anonymous runner could not resolve the current public Douyin listing.' }
+          if (!$rooms.Count) { throw 'No public room was available to the Windows runner' }
+          $executable='simple_live_app/build/windows/x64/runner/Release/simple_live_app.exe'
+          foreach ($room in $rooms) {
+            try {
+              ./tool/test_windows_resize.ps1 -Executable $executable -ReadyFile "$env:RUNNER_TEMP/live-ready-$room" -RoomId $room
+              "Verified same-source live playback and danmaku in public room $room." | Add-Content $env:GITHUB_STEP_SUMMARY
+              exit 0
+            } catch {
+              Write-Host "Probe did not pass for room $room. See the preceding metrics."
+              Get-Process -Name simple_live_app -ErrorAction SilentlyContinue | Stop-Process
+            }
+          }
+          throw 'None of the selected public rooms completed the playback and danmaku probe.'
