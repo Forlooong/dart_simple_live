@@ -1,0 +1,224 @@
+name: Candidate runtime checks
+on:
+  push:
+    branches: [codex/simple-live-verify-e733362]
+    paths: [.github/workflows/verify-e733362.yml, .github/verification/prepare-e733362.py]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 55
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      sha: ${{ steps.candidate.outputs.sha }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN_ID: '45768643574'
+      ROOM: ''
+      PREVIOUS_TAG: 'fork-main-1.12.37-build11138-tv-1.7.27-build10632'
+    steps:
+      - name: Resolve candidate source
+        id: candidate
+        run: |
+          [[ "$RUN_ID" =~ ^[0-9]+$ && ( -z "$ROOM" || "$ROOM" =~ ^[0-9]+$ ) ]]
+          [[ "$PREVIOUS_TAG" =~ ^fork-main-[0-9.]+-build[0-9]+-tv-[0-9.]+-build[0-9]+$ ]]
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq .head_sha)
+          test "$sha" = 'e733362d4052aaae5ea9f5003bf10aff659ca204'
+          gh run watch "$RUN_ID" --repo "$GITHUB_REPOSITORY" --interval 15 --exit-status
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ steps.candidate.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: verification-harness
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Verify provenance, all installer digests and Android signatures
+        run: |
+          signer=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)
+          test -x "$signer"
+          PYTHONPATH="$PWD/tool" python -B verification-harness/.github/verification/prepare-e733362.py "$RUN_ID" --source "$PWD" --output "$RUNNER_TEMP/candidate" \
+            --apksigner "$signer" --aapt2 "$(dirname "$signer")/aapt2"
+          cd "$RUNNER_TEMP/candidate"
+          jq -e '.sourceSha == "e733362d4052aaae5ea9f5003bf10aff659ca204"' update.json >/dev/null
+          sha256sum -c SHA256SUMS.txt
+          awk '/Android(-TV)?-x64-ReleaseSigned.apk|Windows-x64-Setup-Unsigned.exe|Linux-x64.deb/ {print}' \
+            SHA256SUMS.txt >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: verified-runtime-inputs
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/candidate/*-Android-x64-ReleaseSigned.apk
+            ${{ runner.temp }}/candidate/*-Android-TV-x64-ReleaseSigned.apk
+            ${{ runner.temp }}/candidate/*-Windows-x64-Setup-Unsigned.exe
+            ${{ runner.temp }}/candidate/*-Linux-x64.deb
+            ${{ runner.temp }}/candidate/update.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: release-review-e733362
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/release-notes.md
+            ${{ runner.temp }}/candidate/update.json
+            ${{ runner.temp }}/candidate/SHA256SUMS.txt
+            ${{ runner.temp }}/candidate/source.tar.gz
+            ${{ runner.temp }}/candidate/LICENSE.txt
+            ${{ runner.temp }}/candidate/THIRD-PARTY-NOTICES.zip
+
+  android:
+    needs: prepare
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: system-images;android-35;google_apis;x86_64
+            pages: 4096
+            app: main
+            label: Android
+          - image: system-images;android-35;google_apis_ps16k;x86_64
+            pages: 16384
+            app: main
+            label: Android
+          - image: system-images;android-36;google-tv-ps16k;x86_64
+            pages: 16384
+            app: tv
+            label: Android-TV
+    env:
+      APP: ${{ matrix.app }}
+      IMAGE: ${{ matrix.image }}
+      PAGE_SIZE: ${{ matrix.pages }}
+      LABEL: ${{ matrix.label }}
+      PREVIOUS_TAG: 'fork-main-1.12.37-build11138-tv-1.7.27-build10632'
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: verified-runtime-inputs
+          path: ${{ runner.temp }}/candidate
+      - name: Start disposable emulator and check page size
+        run: |
+          test -e /dev/kvm
+          sudo chmod a+rw /dev/kvm
+          manager=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | sort -V | tail -1)
+          test -x "$manager"
+          export PATH="$ANDROID_HOME/platform-tools:$(dirname "$manager"):$PATH"
+          printf '%s\n' "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          yes | "$manager" --licenses >/dev/null || test "${PIPESTATUS[1]}" = 0
+          for attempt in 1 2 3; do
+            if "$manager" --channel=3 --install emulator "$IMAGE"; then break; fi
+            test "$attempt" -lt 3
+          done
+          printf 'no\n' | avdmanager create avd --name release_smoke --package "$IMAGE" --force
+          nohup "$ANDROID_HOME/emulator/emulator" -avd release_smoke -no-window -no-snapshot \
+            -noaudio -no-boot-anim -gpu swiftshader_indirect -memory 3072 > "$RUNNER_TEMP/emulator.log" 2>&1 </dev/null &
+          timeout 240 bash -c 'adb wait-for-device; until [[ $(adb shell getprop sys.boot_completed | tr -d "\r") = 1 ]]; do sleep 3; done'
+          test "$(adb shell getconf PAGE_SIZE | tr -d '\r')" = "$PAGE_SIZE"
+      - name: Verify exact package, upgrade in place and cold launch
+        run: |
+          cd "$RUNNER_TEMP/candidate"
+          package=$(jq -r --arg app "$APP" '.[$app].packages[] | select(.platform == "android" and .arch == "x64") | .packageId' update.json)
+          version=$(jq -r --arg app "$APP" '.[$app].version' update.json)
+          url=$(jq -r --arg app "$APP" '.[$app].packages[] | select(.platform == "android" and .arch == "x64") | .url' update.json)
+          apk=${url##*/}
+          digest=$(jq -r --arg app "$APP" '.[$app].packages[] | select(.platform == "android" and .arch == "x64") | .sha256' update.json)
+          printf '%s  %s\n' "$digest" "$apk" | sha256sum -c -
+          gh release download "$PREVIOUS_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern "*-$LABEL-x64-ReleaseSigned.apk" --output previous.apk
+          adb install previous.apk
+          adb shell am start -W -n "$package/.MainActivity" | grep -F 'Status: ok'
+          adb shell am force-stop "$package"
+          adb root
+          adb wait-for-device
+          app_data="/data/user/0/$package"
+          app_uid=$(adb shell stat -c '%u' "$app_data" | tr -d '\r')
+          [[ "$app_uid" =~ ^[1-9][0-9]+$ ]]
+          sentinel=$(python -c 'import secrets; print(secrets.token_hex(16))')
+          adb shell "mkdir -p '$app_data/files' && chown '$app_uid' '$app_data/files' && printf '%s' '$sentinel' > '$app_data/files/.candidate-upgrade-sentinel' && chown '$app_uid' '$app_data/files/.candidate-upgrade-sentinel'"
+          adb install -r "$apk"
+          test "$(adb shell cat "$app_data/files/.candidate-upgrade-sentinel" | tr -d '\r')" = "$sentinel"
+          test "$(adb shell stat -c '%u' "$app_data" | tr -d '\r')" = "$app_uid"
+          adb shell dumpsys package "$package" | tr -d '\r' | grep -F "versionName=$version"
+          adb shell am force-stop "$package"
+          adb logcat -b crash -c
+          adb shell am start -W -n "$package/.MainActivity" | grep -F 'Status: ok'
+          sleep 12
+          adb shell pidof "$package"
+          adb logcat -b crash -d > "$RUNNER_TEMP/crash-summary.txt"
+          if grep -F "Process: $package" "$RUNNER_TEMP/crash-summary.txt"; then exit 1; fi
+          echo "Verified launch, in-place upgrade and persisted data sentinel at $PAGE_SIZE-byte pages." >> "$GITHUB_STEP_SUMMARY"
+
+  windows:
+    needs: prepare
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: verified-runtime-inputs
+          path: ${{ runner.temp }}/candidate
+      - name: Test the verified installed Windows candidate
+        shell: pwsh
+        run: |
+          $inputRoot = Join-Path $env:RUNNER_TEMP 'candidate'
+          $manifest = Get-Content -Raw (Join-Path $inputRoot 'update.json') | ConvertFrom-Json
+          $item = $manifest.main.packages | Where-Object platform -eq 'windows'
+          $file = Join-Path $inputRoot ([IO.Path]::GetFileName(([Uri]$item.url).LocalPath))
+          if ((Get-FileHash -LiteralPath $file).Hash -ne $item.sha256) { throw 'Installer digest mismatch' }
+          $installed = Join-Path $env:RUNNER_TEMP 'installed-release'
+          $installer = Start-Process -FilePath $file -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', ('/DIR="' + $installed + '"')) -WindowStyle Hidden -PassThru -Wait
+          if ($installer.ExitCode -ne 0) { throw "Installer exited $($installer.ExitCode)" }
+          ./tool/test_windows_resize.ps1 -Executable (Join-Path $installed 'simple_live_app.exe')
+      - name: Record pending live probe
+        shell: pwsh
+        run: |
+          'PENDING: same-source live playback and danmaku probe requires a verified public live room.' | Add-Content $env:GITHUB_STEP_SUMMARY
+
+  linux:
+    needs: prepare
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: verified-runtime-inputs
+          path: ${{ runner.temp }}/candidate
+      - name: Verify DEB, install and launch
+        run: |
+          cd "$RUNNER_TEMP/candidate"
+          url=$(jq -r '.main.packages[] | select(.platform == "linux") | .url' update.json)
+          deb=${url##*/}
+          digest=$(jq -r '.main.packages[] | select(.platform == "linux") | .sha256' update.json)
+          printf '%s  %s\n' "$digest" "$deb" | sha256sum -c -
+          sudo apt-get update
+          sudo apt-get install -y xvfb "./$deb"
+          LD_LIBRARY_PATH=/opt/simple-live/lib ldd /opt/simple-live/simple_live_app > "$RUNNER_TEMP/linked-libraries.txt"
+          if grep -F 'not found' "$RUNNER_TEMP/linked-libraries.txt"; then exit 1; fi
+          result=0
+          timeout 10s xvfb-run -a simple-live || result=$?
+          test "$result" -eq 124
