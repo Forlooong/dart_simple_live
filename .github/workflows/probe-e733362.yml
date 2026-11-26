@@ -44,13 +44,20 @@ jobs:
           if (!$rooms.Count) { throw 'No public room was available to the Windows runner' }
           $executable='simple_live_app/build/windows/x64/runner/Release/simple_live_app.exe'
           foreach ($room in $rooms) {
-            try {
-              ./tool/test_windows_resize.ps1 -Executable $executable -ReadyFile "$env:RUNNER_TEMP/live-ready-$room" -RoomId $room
-              "Verified same-source live playback and danmaku in public room $room." | Add-Content $env:GITHUB_STEP_SUMMARY
+            $ready = Join-Path $env:RUNNER_TEMP "live-ready-$room"
+            # Each attempt needs a fresh PowerShell host for the probe's Add-Type.
+            & pwsh -NoProfile -File ./tool/test_windows_resize.ps1 -Executable $executable -ReadyFile $ready -RoomId $room
+            $probeExit = $LASTEXITCODE
+            $reportPath = "$ready.json"
+            if (Test-Path -LiteralPath $reportPath) { Get-Content -LiteralPath $reportPath }
+            if ($probeExit -eq 0) {
+              "Verified live playback and danmaku in public room $room." | Add-Content $env:GITHUB_STEP_SUMMARY
               exit 0
-            } catch {
-              Write-Host "Probe did not pass for room $room. See the preceding metrics."
-              Get-Process -Name simple_live_app -ErrorAction SilentlyContinue | Stop-Process
+            }
+            Write-Host "Probe failed in room $room (exit code $probeExit)."
+            Get-Process -Name simple_live_app -ErrorAction SilentlyContinue | ForEach-Object {
+              $_ | Stop-Process
+              $_ | Wait-Process -ErrorAction SilentlyContinue
             }
           }
-          throw 'None of the selected public rooms completed the playback and danmaku probe.'
+          throw 'No room completed all playback and danmaku assertions.'
