@@ -278,6 +278,67 @@ void main() {
     expect(result.hasMore, isFalse);
   });
 
+  test(
+    'a limited search source does not consume pages or block the other source',
+    () async {
+      final client = HttpClient.instance;
+      final original = client.dio;
+      final testDio = Dio();
+      client.dio = testDio;
+      addTearDown(() {
+        client.dio = original;
+        testDio.close();
+      });
+      final requests = <(bool, String?)>[];
+      testDio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            final live = options.uri.path.endsWith('/live/search/');
+            final offset = options.uri.queryParameters['offset'];
+            requests.add((live, offset));
+            handler.resolve(
+              Response(
+                requestOptions: options,
+                statusCode: 200,
+                data: live
+                    ? {'status_code': 8, 'status_msg': '请求过于频繁，请稍后再试'}
+                    : {
+                        'status_code': 0,
+                        'has_more': offset == '0' ? 1 : 0,
+                        'user_list': [
+                          {
+                            'user_info': {
+                              'nickname': '主播',
+                              'web_rid': offset == '0' ? '123' : '456',
+                            },
+                          },
+                        ],
+                      },
+              ),
+            );
+          },
+        ),
+      );
+      final site = DouyinSite()..cookie = 'test_session=fixture';
+      final search = site.createRoomSearch('主播');
+      final first = await search.load();
+      expect(first.items.single.roomId, '123');
+      expect(first.partialFailure?.kind, CoreErrorKind.rateLimited);
+      expect(first.hasMore, isTrue);
+      final second = await search.load();
+      expect(second.items.single.roomId, '456');
+      expect(second.hasMore, isFalse);
+      await search.load(retry: true);
+      await site.createRoomSearch('不同关键词').load();
+      expect(requests.where((entry) => entry.$1), [(true, '0')]);
+      expect(requests.where((entry) => !entry.$1), [
+        (false, '0'),
+        (false, '10'),
+        (false, '0'),
+      ]);
+    },
+  );
+
   test('direct live room link uses the independent room query', () async {
     final site = _DirectLinkSite();
 

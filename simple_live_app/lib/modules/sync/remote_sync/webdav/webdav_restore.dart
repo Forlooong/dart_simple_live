@@ -330,7 +330,14 @@ class WebDavRestorePreview {
         memberships[id] = tagId;
       }
     }
-    final members = {for (final id in tags.keys) id: <String>[]};
+    final members = {
+      for (final id in tags.keys)
+        id: <String>{
+          for (final room in (oldTags[id]?['userId'] as List?) ?? const [])
+            if (memberships[room] == id && follows.containsKey(room))
+              room as String,
+        },
+    };
     final orderedFollows = follows.keys.toList()..sort();
     final nextFollows = <Map>[];
     for (final id in orderedFollows) {
@@ -342,7 +349,7 @@ class WebDavRestorePreview {
       'follows': nextFollows,
       'tags': [
         for (final tag in tags.entries)
-          {...tag.value, 'userId': members[tag.key]!},
+          {...tag.value, 'userId': members[tag.key]!.toList()},
       ],
     };
   }
@@ -426,7 +433,10 @@ class WebDavRestore {
     await box.flush();
   }
 
-  Future<Map<String, dynamic>> _recover(Box box) async {
+  Future<Map<String, dynamic>> _recover(
+    Box box, {
+    List<String>? conflicts,
+  }) async {
     final saved = box.get(_checkpointKey) as Map?;
     final current = Map<String, dynamic>.from(saved?['current'] as Map? ?? {});
     final pending = saved?['pending'] as Map?;
@@ -434,9 +444,13 @@ class WebDavRestore {
     final committed = <String, dynamic>{};
     for (final group in RestoreGroup.values) {
       final entry = pending[group.name] as Map?;
-      if (entry != null &&
-          _digest(await _read(group)) != _digest(entry['before'])) {
+      if (entry == null) continue;
+      final actual = _digest(await _read(group));
+      if (actual == entry['after']) {
         committed[group.name] = entry;
+      } else if (actual != _digest(entry['before'])) {
+        conflicts?.add(group.label);
+        Log.w('WebDAV 恢复记录冲突：${group.label}');
       }
     }
     final checkpoint = committed.isEmpty ? current : committed;
@@ -487,7 +501,7 @@ class WebDavRestore {
     } else {
       // Leave the checkpoint available if a box committed before a refresh
       // failed; the same reconciliation also covers a process interruption.
-      await _recover(journal);
+      await _recover(journal, conflicts: result.skipped);
     }
     return result;
   }
@@ -499,8 +513,8 @@ class WebDavRestore {
 
   Future<WebDavRestoreResult> _rollback() async {
     final journal = await _journal();
-    final checkpoint = await _recover(journal);
     final result = WebDavRestoreResult();
+    final checkpoint = await _recover(journal, conflicts: result.skipped);
     for (final group in RestoreGroup.values) {
       final entry = checkpoint[group.name] as Map?;
       if (entry == null) continue;

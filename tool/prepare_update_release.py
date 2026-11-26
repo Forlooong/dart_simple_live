@@ -45,6 +45,18 @@ def release_changes(root, head, previous, tag):
     return '\n'.join(f'- {title}' for title in dict.fromkeys(titles))
 
 
+def notes_for_app(notes, app):
+    parts = re.split(r'^## (共通|主应用|TV)[ \t]*$', notes, flags=re.M)
+    if len(parts) == 1:
+        return notes
+    sections = dict(zip(parts[1::2], parts[2::2]))
+    require(len(parts) == 7 and not parts[0].strip() and
+            set(sections) == {'共通', '主应用', 'TV'}, 'Invalid Chinese update detail sections')
+    target = '主应用' if app == 'main' else 'TV'
+    return '\n\n'.join(f'{label}\n{sections[label].strip()}'
+                        for label in ('共通', target) if sections[label].strip())
+
+
 def release_body(notes, manifest_bytes):
     encoded = base64.b64encode(manifest_bytes).decode('ascii')
     return f'{notes.rstrip()}\n\n<!-- simple-live-update-manifest:v1\n{encoded}\n-->\n'
@@ -128,7 +140,7 @@ def main():
     changes = release_changes(root, actual, latest.get('target_commitish') if latest else None, tag)
     manifest = {'schemaVersion': 1, 'repository': REPOSITORY, 'sourceSha': actual}
     for app, (name, build) in versions.items():
-        manifest[app] = {'version': name, 'notes': changes, 'packages': []}
+        manifest[app] = {'version': name, 'notes': notes_for_app(changes, app), 'packages': []}
     artifacts = api.pages(f'/actions/runs/{args.run_id}/artifacts', 'artifacts')
     require(len(artifacts) == len(TARGETS),
             f'Expected exactly {len(TARGETS)} installer artifacts')

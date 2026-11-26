@@ -7,6 +7,16 @@ import 'package:simple_live_app/services/local_storage_service.dart';
 import 'package:simple_live_app/services/live_notifications/notification_store.dart';
 import 'package:simple_live_app/services/live_notifications/notification_subscription.dart';
 
+class _Storage extends LocalStorageService {
+  String? failingKey;
+
+  @override
+  Future<void> setValue<T>(dynamic key, T value) async {
+    if (key == failingKey) throw StateError('injected vault failure');
+    await super.setValue(key, value);
+  }
+}
+
 void main() {
   test('diagnostic exports contain only counts and fixed metadata', () {
     final text = Log.diagnosticSummary(
@@ -26,19 +36,59 @@ void main() {
   });
   TestWidgetsFlutterBinding.ensureInitialized();
   late Directory directory;
-  late LocalStorageService storage;
+  late _Storage storage;
   setUp(() async {
     FlutterSecureStorage.setMockInitialValues({});
     directory = await Directory.systemTemp.createTemp('credential-safety-');
     Hive.init(directory.path);
-    storage = LocalStorageService()
-      ..settingsBox = await Hive.openBox('settings');
+    storage = _Storage()..settingsBox = await Hive.openBox('settings');
   });
   tearDown(() async {
     await storage.credentialChanges.close();
     await Hive.close();
     await directory.delete(recursive: true);
   });
+
+  test(
+    'WebDAV session changes are independent of legacy-key failures',
+    () async {
+      await storage.setValue(
+        LocalStorageService.kWebDAVUri,
+        'https://old.invalid',
+      );
+      await storage.setValue(LocalStorageService.kWebDAVUser, 'old');
+      await storage.setValue(LocalStorageService.kWebDAVPassword, 'old-secret');
+      expect(storage.webDavSession?.uri, 'https://old.invalid');
+
+      storage.failingKey = 'WebDAVSession';
+      await expectLater(
+        storage.saveWebDavSession(
+          uri: 'https://new.invalid',
+          user: 'new',
+          password: 'new-secret',
+        ),
+        throwsStateError,
+      );
+      expect(storage.webDavSession?.password, 'old-secret');
+
+      storage.failingKey = LocalStorageService.kWebDAVPassword;
+      await storage.saveWebDavSession(
+        uri: 'https://new.invalid',
+        user: 'new',
+        password: 'new-secret',
+      );
+      final reopened = LocalStorageService()..settingsBox = storage.settingsBox;
+      await reopened.migrateCredentials();
+      expect(reopened.webDavSession?.uri, 'https://new.invalid');
+      expect(reopened.webDavSession?.user, 'new');
+      expect(reopened.webDavSession?.password, 'new-secret');
+
+      await storage.clearWebDavSession();
+      await reopened.migrateCredentials();
+      expect(reopened.webDavSession, isNull);
+      await reopened.credentialChanges.close();
+    },
+  );
 
   test(
     'legacy credentials migrate once and never enter preferences or backup',
@@ -135,9 +185,7 @@ void main() {
         LocalStorageService.kBilibiliCookie,
         'CANARY-vault',
       );
-      await store.writeConfig(
-        NotificationConfig(rooms: rooms),
-      );
+      await store.writeConfig(NotificationConfig(rooms: rooms));
       expect(
         await File('${directory.path}/subscriptions.json').readAsString(),
         isNot(contains('CANARY')),

@@ -20,6 +20,7 @@ class BiliBiliAccountService extends GetxService {
   var uid = 0;
   int _accountRevision = 0;
   int _userInfoRequest = 0;
+  Future<void> _accountWrites = Future.value();
   var name = "未登录".obs;
 
   @override
@@ -72,42 +73,56 @@ class BiliBiliAccountService extends GetxService {
     site.cookie = cookie;
   }
 
-  Future<void> setCookie(String cookie) async {
-    // Invalidate pending account checks before waiting for the vault. Only a
-    // successful write changes the in-memory session and provider credentials.
-    _accountRevision++;
+  Future<T> _writeAccount<T>(Future<T> Function() action) {
+    final result = _accountWrites.then((_) => action());
+    _accountWrites = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace __) {},
+    );
+    return result;
+  }
+
+  Future<void> _commitCookie(
+    String value, {
+    BiliBiliUserInfoModel? info,
+  }) async {
+    ++_userInfoRequest;
     await LocalStorageService.instance.setValue(
       LocalStorageService.kBilibiliCookie,
-      cookie,
+      value,
     );
-    _accountRevision++;
-    this.cookie = cookie;
-    uid = 0;
-    name.value = "未登录";
-    logined.value = cookie.isNotEmpty;
+    ++_userInfoRequest;
+    cookie = value;
+    uid = info?.mid ?? 0;
+    name.value = info?.uname ?? '未登录';
+    logined.value = value.isNotEmpty;
     setSite();
   }
 
+  Future<void> setCookie(String value) {
+    ++_accountRevision;
+    return _writeAccount(() => _commitCookie(value));
+  }
+
+  /// A false result leaves the existing session in place. Network and storage
+  /// failures propagate so the caller can distinguish them from a rejected input.
   Future<bool> importVerifiedCookie(String candidate) async {
-    final revision = _accountRevision;
+    if (candidate.isEmpty || candidate.length > 65536) return false;
+    final revision = ++_accountRevision;
     final result = await HttpClient.instance.getJson(
       'https://api.bilibili.com/x/member/web/account',
       header: {'Cookie': candidate},
     );
-    if (result is! Map ||
-        result['code'] != 0 ||
-        result['data'] is! Map ||
-        revision != _accountRevision)
+    if (result is! Map || result['code'] != 0 || result['data'] is! Map) {
       return false;
+    }
     final info = BiliBiliUserInfoModel.fromJson(result['data']);
     if (info.mid == null || info.mid! <= 0) return false;
-    await setCookie(candidate);
-    if (cookie == candidate) {
-      uid = info.mid!;
-      name.value = info.uname ?? '未登录';
-      setSite();
-    }
-    return cookie == candidate;
+    return _writeAccount(() async {
+      if (revision != _accountRevision) return false;
+      await _commitCookie(candidate, info: info);
+      return true;
+    });
   }
 
   Future<void> logout() async {

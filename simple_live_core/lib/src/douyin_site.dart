@@ -38,6 +38,7 @@ class DouyinSite extends LiveSite {
   static const int kHomeCategoryRoomCount = 5;
   static const int kHomeRequestConcurrency = 4;
 
+  final _searchRecovery = PlatformRecovery();
   List<LiveRoomItem>? _recommendSnapshot;
   Future<List<LiveRoomItem>>? _recommendBuild;
   final _broadcastStartTimes = <String, String>{};
@@ -74,8 +75,6 @@ class DouyinSite extends LiveSite {
   }
 
   void _logDebug(String msg) {
-    // 同时使用 print 和 CoreLog 确保日志输出
-    print("[Douyin] $msg");
     CoreLog.d("[Douyin] $msg");
   }
 
@@ -1026,14 +1025,30 @@ class DouyinSite extends LiveSite {
 
     // Merge the two sources, retaining usable results if one is unavailable.
     final (live, users) = await (
-      _searchSource(() => _searchLiveRooms(keyword, page)),
+      _searchSource(
+        () => _runSearchSource('live', () => _searchLiveRooms(keyword, page)),
+      ),
       _searchSource(() => searchAnchors(keyword, page: page)),
     ).wait;
     RequestContext.current?.check();
     if (live.$1 == null && users.$1 == null) throw users.$2!;
-    final items = <LiveRoomItem>[...?live.$1?.items];
+    return LiveSearchRoomResult(
+      items: _mergeSearchRooms(live.$1?.items ?? [], users.$1?.items ?? []),
+      hasMore: live.$1?.hasMore == true || users.$1?.hasMore == true,
+      partialFailure: users.$2 ?? live.$2,
+    );
+  }
+
+  DouyinRoomSearch createRoomSearch(String keyword) =>
+      DouyinRoomSearch._(this, keyword);
+
+  static List<LiveRoomItem> _mergeSearchRooms(
+    List<LiveRoomItem> rooms,
+    List<LiveAnchorItem> anchors,
+  ) {
+    final items = <LiveRoomItem>[...rooms];
     final byRoom = {for (final item in items) item.roomId: item};
-    for (final user in users.$1?.items ?? const <LiveAnchorItem>[]) {
+    for (final user in anchors) {
       if (user.roomId.isNotEmpty && byRoom.containsKey(user.roomId)) {
         final previous = byRoom[user.roomId]!;
         items[items.indexOf(previous)] = LiveRoomItem(
@@ -1064,12 +1079,41 @@ class DouyinSite extends LiveSite {
         ),
       );
     }
-    return LiveSearchRoomResult(
-      items: items,
-      hasMore: live.$1?.hasMore == true || users.$1?.hasMore == true,
-      partialFailure: users.$2 ?? live.$2,
-    );
+    return items;
   }
+
+  Future<T> _runSearchSource<T>(
+    String source,
+    Future<T> Function() request,
+  ) async {
+    final version = statusConfigurationVersion;
+    final blocked = _searchRecovery.blocked(source, version);
+    if (blocked != null) throw CoreError('抖音搜索暂不可用', site: id, kind: blocked);
+    try {
+      final result = await request();
+      RequestContext.current?.check();
+      if (version != statusConfigurationVersion) {
+        throw CoreError('抖音搜索账号已变更', kind: CoreErrorKind.cancelled);
+      }
+      if (_searchRecovery.blocked(source, version) == null) {
+        _searchRecovery.succeeded(source);
+      }
+      return result;
+    } catch (error) {
+      RequestContext.current?.check();
+      if (version == statusConfigurationVersion) {
+        _searchRecovery.failed(source, version, error);
+      }
+      rethrow;
+    }
+  }
+
+  static Uri webSearchUri(String keyword, {required bool anchors}) => Uri(
+    scheme: 'https',
+    host: 'www.douyin.com',
+    pathSegments: ['search', keyword.trim()],
+    queryParameters: {'type': anchors ? 'user' : 'live'},
+  );
 
   static String? directSearchRoomId(String input) {
     final uri = Uri.tryParse(input.trim());
@@ -1184,7 +1228,12 @@ class DouyinSite extends LiveSite {
   Future<LiveSearchAnchorResult> searchAnchors(
     String keyword, {
     int page = 1,
-  }) async {
+  }) => _runSearchSource('user', () => _searchAnchors(keyword, page));
+
+  Future<LiveSearchAnchorResult> _searchAnchors(
+    String keyword,
+    int page,
+  ) async {
     final uri = Uri.https('www.douyin.com', '/aweme/v1/web/discover/search/', {
       'device_platform': 'webapp',
       'aid': '6383',
@@ -1419,7 +1468,7 @@ class DouyinSite extends LiveSite {
     }
     try {
       final data = await _getRoomDataByApi(webRid);
-      return _webRoomStatus(data['data'][0]);
+      return await _webRoomStatus(data['data'][0]);
     } catch (error) {
       RequestContext.current?.check();
       if (error is CoreError &&
@@ -1459,5 +1508,67 @@ class DouyinSite extends LiveSite {
     }
     return int.tryParse(stringBuffer.toString()) ??
         Random().nextInt(1000000000);
+  }
+}
+
+class DouyinRoomSearch {
+  DouyinRoomSearch._(this._site, this._keyword);
+
+  final DouyinSite _site;
+  final String _keyword;
+  int? _livePage = 1;
+  int? _userPage = 1;
+  CoreError? _liveError;
+  CoreError? _userError;
+
+  Future<LiveSearchRoomResult> load({bool retry = false}) async {
+    final version = _site.statusConfigurationVersion;
+    final livePage = _livePage;
+    final userPage = _userPage;
+    final retryFailed = retry && (_liveError != null || _userError != null);
+    final requestLive = livePage != null && (_liveError != null) == retryFailed;
+    final requestUsers =
+        userPage != null && (_userError != null) == retryFailed;
+    final (live, users) = await (
+      requestLive
+          ? _site._searchSource(
+              () => _site._runSearchSource(
+                'live',
+                () => _site._searchLiveRooms(_keyword, livePage),
+              ),
+            )
+          : Future.value((null as LiveSearchRoomResult?, null as CoreError?)),
+      requestUsers
+          ? _site._searchSource(
+              () => _site.searchAnchors(_keyword, page: userPage),
+            )
+          : Future.value((null as LiveSearchAnchorResult?, null as CoreError?)),
+    ).wait;
+    RequestContext.current?.check();
+    if (version != _site.statusConfigurationVersion) {
+      throw CoreError('抖音搜索账号已变更', kind: CoreErrorKind.cancelled);
+    }
+    if (requestLive) {
+      _liveError = live.$2;
+      if (live.$1 case final result?) {
+        _livePage = result.hasMore ? livePage + 1 : null;
+      }
+    }
+    if (requestUsers) {
+      _userError = users.$2;
+      if (users.$1 case final result?) {
+        _userPage = result.hasMore ? userPage + 1 : null;
+      }
+    }
+    return LiveSearchRoomResult(
+      items: DouyinSite._mergeSearchRooms(
+        live.$1?.items ?? [],
+        users.$1?.items ?? [],
+      ),
+      hasMore:
+          (_livePage != null && _liveError == null) ||
+          (_userPage != null && _userError == null),
+      partialFailure: _userError ?? _liveError,
+    );
   }
 }

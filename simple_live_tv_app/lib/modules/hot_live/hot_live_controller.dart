@@ -56,6 +56,7 @@ class HotliveController extends BasePageController<LiveRoomItemExt> {
 }
 
 class LiveRoomItemExt extends LiveRoomItem {
+  final Site? searchSite;
   LiveRoomItemExt({
     required super.roomId,
     required super.title,
@@ -64,6 +65,7 @@ class LiveRoomItemExt extends LiveRoomItem {
     super.online = 0,
     super.onlineKnown,
     super.profile,
+    this.searchSite,
     super.liveStatus,
   });
 

@@ -14,17 +14,15 @@ typedef AggregateSearchResult = ({
   String? accountId,
 });
 
-Uri douyinWebSearchUri(String keyword, {required bool anchors}) => Uri.https(
-  'www.douyin.com',
-  '/search/$keyword',
-  {'type': anchors ? 'user' : 'live'},
-);
+Uri douyinWebSearchUri(String keyword, {required bool anchors}) =>
+    DouyinSite.webSearchUri(keyword, anchors: anchors);
 
 class PlatformSearchResults {
   final results = <String, AggregateSearchResult>{};
   int nextPage = 1;
   bool hasMore = true;
   bool loading = false;
+  DouyinRoomSearch? douyinRooms;
   final _failedPages = SplayTreeMap<int, CoreErrorKind>();
   int? get retryPage => _failedPages.firstKey();
   CoreErrorKind? get failure => _failedPages[retryPage];
@@ -171,6 +169,12 @@ class AggregateSearch extends ChangeNotifier {
         state.loading) {
       return;
     }
+    final roomSearch =
+        site is DouyinSite &&
+            !anchors &&
+            DouyinSite.directSearchRoomId(keyword) == null
+        ? state.douyinRooms ??= site.createRoomSearch(keyword)
+        : null;
     final version = site.statusConfigurationVersion;
     final recoveryKey = id != 'douyin'
         ? id
@@ -179,7 +183,9 @@ class AggregateSearch extends ChangeNotifier {
         : DouyinSite.directSearchRoomId(keyword) != null
         ? 'douyin:direct'
         : 'douyin:rooms';
-    final block = _recovery.blocked(recoveryKey, version);
+    final block = roomSearch == null
+        ? _recovery.blocked(recoveryKey, version)
+        : null;
     final page = retry ? state.retryPage ?? state.nextPage : state.nextPage;
     if (block != null) {
       state._failedPages[page] = block;
@@ -218,7 +224,9 @@ class AggregateSearch extends ChangeNotifier {
                 null as CoreError?,
               );
             }
-            final result = await site.searchRooms(term, page: page);
+            final result = roomSearch == null
+                ? await site.searchRooms(term, page: page)
+                : await roomSearch.load(retry: retry);
             return (
               result.items.map<AggregateSearchResult>(
                 (item) => (
@@ -246,6 +254,13 @@ class AggregateSearch extends ChangeNotifier {
       for (final item in items) {
         _store(id, item);
       }
+      if (roomSearch != null) {
+        state.hasMore = more;
+        state.nextPage++;
+        state._failedPages.clear();
+        if (partial != null) state._failedPages[1] = partial.kind;
+        return;
+      }
       if (page == state.nextPage) {
         state.hasMore = more;
         if (partial == null || more) state.nextPage++;
@@ -259,7 +274,7 @@ class AggregateSearch extends ChangeNotifier {
     } catch (error) {
       context.cancel();
       if (!current()) return;
-      _recovery.failed(recoveryKey, version, error);
+      if (roomSearch == null) _recovery.failed(recoveryKey, version, error);
       state._failedPages[page] = PlatformRecovery.classify(error);
     } finally {
       if (current()) {

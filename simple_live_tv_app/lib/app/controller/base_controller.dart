@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/widgets.dart';
+import 'package:simple_live_core/simple_live_core.dart';
 import 'package:simple_live_tv_app/app/app_error.dart';
 
 import 'package:flutter_easyrefresh/easy_refresh.dart';
@@ -66,45 +67,72 @@ class BasePageController<T> extends BaseController {
   var canLoadMore = false.obs;
   var list = <T>[].obs;
 
-  Future refreshData() async {
+  Object? _activePage;
+  Duration? get pageTimeout => null;
+  bool _exhausted = false;
+  int _pageGeneration = 0;
+  int get pageGeneration => _pageGeneration;
+
+  Future<void> refreshData() async {
+    _pageGeneration++;
+    if (_activePage case RequestContext context) context.cancel();
+    _activePage = null;
+    _exhausted = false;
     currentPage = 1;
-    list.value = [];
+    canLoadMore.value = false;
+    list.clear();
     await loadData();
   }
 
-  Future loadData() async {
+  Future<void> loadData({bool retry = false}) async {
+    if (isClosed || _activePage != null || (_exhausted && !retry)) return;
+    final timeout = pageTimeout;
+    final context = timeout == null ? null : RequestContext(timeout: timeout);
+    final request = context ?? Object();
+    final page = currentPage;
+    _activePage = request;
     try {
-      if (loadding.value) return;
       loadding.value = true;
       pageError.value = false;
       pageEmpty.value = false;
       notLogin.value = false;
-      pageLoadding.value = currentPage == 1;
-
-      var result = await getData(currentPage, pageSize);
-      //是否可以加载更多
-      if (result.isNotEmpty) {
-        currentPage++;
-        canLoadMore.value = true;
-        pageEmpty.value = false;
-      } else {
-        canLoadMore.value = false;
-        if (currentPage == 1) {
-          pageEmpty.value = true;
-        }
-      }
-      // 赋值数据
-      if (currentPage == 1) {
-        list.value = result;
-      } else {
-        list.addAll(result);
-      }
-    } catch (e) {
-      handleError(e, showPageError: currentPage == 1);
+      pageLoadding.value = page == 1;
+      final result = await (context == null
+          ? getPage(page, pageSize, retry: retry)
+          : context.run(() => getPage(page, pageSize, retry: retry)));
+      if (!identical(_activePage, request)) return;
+      if (result.items.isNotEmpty || result.hasMore) currentPage = page + 1;
+      _exhausted = !result.hasMore;
+      canLoadMore.value = result.hasMore;
+      list.addAll(result.items);
+      pageEmpty.value = list.isEmpty && !result.hasMore;
+    } catch (error) {
+      if (!identical(_activePage, request)) return;
+      handleError(error, showPageError: list.isEmpty);
     } finally {
-      loadding.value = false;
-      pageLoadding.value = false;
+      if (identical(_activePage, request)) {
+        _activePage = null;
+        loadding.value = false;
+        pageLoadding.value = false;
+      }
     }
+  }
+
+  Future<({List<T> items, bool hasMore})> getPage(
+    int page,
+    int pageSize, {
+    bool retry = false,
+  }) async {
+    final items = await getData(page, pageSize);
+    return (items: items, hasMore: items.isNotEmpty);
+  }
+
+  @override
+  void onClose() {
+    _pageGeneration++;
+    if (_activePage case RequestContext context) context.cancel();
+    _activePage = null;
+    super.onClose();
   }
 
   Future<List<T>> getData(int page, int pageSize) async {

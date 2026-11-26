@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:simple_live_core/simple_live_core.dart';
 import 'package:simple_live_tv_app/app/sites.dart';
@@ -5,12 +7,13 @@ import 'package:simple_live_tv_app/modules/search/room/search_room_controller.da
 
 class _Site extends LiveSite {
   late LiveSearchRoomResult result;
+  Future<LiveSearchRoomResult> Function(int page)? fetchPage;
 
   @override
   Future<LiveSearchRoomResult> searchRooms(
     String keyword, {
     int page = 1,
-  }) async => result;
+  }) async => fetchPage == null ? result : await fetchPage!(page);
 }
 
 void main() {
@@ -39,6 +42,35 @@ void main() {
   tearDown(() {
     controller.onClose();
     controller.scrollController.dispose();
+  });
+
+  test('refresh disowns the old page and serializes new pagination', () async {
+    final calls = <int>[];
+    final pages = <Completer<LiveSearchRoomResult>>[];
+    site.fetchPage = (page) {
+      calls.add(page);
+      final response = Completer<LiveSearchRoomResult>();
+      pages.add(response);
+      return response.future;
+    };
+    final first = controller.refreshData();
+    final second = controller.refreshData();
+    await controller.loadData();
+    expect(calls, [1, 1]);
+    pages.last.complete(LiveSearchRoomResult(hasMore: true, items: [room]));
+    await second;
+    final third = controller.loadData();
+    await controller.loadData();
+    expect(calls, [1, 1, 2]);
+    pages.first.complete(LiveSearchRoomResult(hasMore: false, items: []));
+    await first;
+    expect(controller.loadding.value, isTrue);
+    expect(controller.list.single.roomId, '123');
+    pages.last.complete(LiveSearchRoomResult(hasMore: false, items: []));
+    await third;
+    await controller.loadData();
+    expect(calls, [1, 1, 2]);
+    expect(controller.list.single.roomId, '123');
   });
 
   test('empty partial response shows an error and can be retried', () async {

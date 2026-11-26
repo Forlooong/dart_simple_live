@@ -7,6 +7,7 @@ import 'package:simple_live_tv_app/app/app_style.dart';
 import 'package:simple_live_tv_app/app/sites.dart';
 import 'package:simple_live_tv_app/modules/search/anchor/search_anchor_controller.dart';
 import 'package:simple_live_tv_app/routes/app_navigation.dart';
+import 'package:simple_live_tv_app/modules/search/douyin_search_fallback.dart';
 import 'package:simple_live_tv_app/widgets/app_scaffold.dart';
 import 'package:simple_live_tv_app/widgets/button/highlight_button.dart';
 import 'package:simple_live_tv_app/widgets/card/anchor_card.dart';
@@ -92,6 +93,15 @@ class SearchAnchorPage extends GetView<SearchAnchorController> {
                 .toList(),
           ),
           AppStyle.vGap24,
+          Obx(() {
+            if (!controller.showDouyinWebSearch) {
+              return const SizedBox.shrink();
+            }
+            return DouyinSearchFallback(
+              keyword: controller.keyword,
+              anchors: true,
+            );
+          }),
           Expanded(
             child: Obx(
               () => Stack(
@@ -108,7 +118,8 @@ class SearchAnchorPage extends GetView<SearchAnchorController> {
 
                       if (i == 0) {
                         Future.delayed(Duration.zero, () {
-                          if (controller.currentPage == 2) {
+                          if (controller.currentPage == 2 &&
+                              identical(controller.list.firstOrNull, item)) {
                             item.focusNode.requestFocus();
                           }
                         });
@@ -127,7 +138,7 @@ class SearchAnchorPage extends GetView<SearchAnchorController> {
                         onTap: () {
                           if (item.roomId.isNotEmpty) {
                             AppNavigator.toLiveRoomDetail(
-                              site: controller.site,
+                              site: item.site,
                               roomId: item.roomId,
                             );
                             return;

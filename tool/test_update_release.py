@@ -7,12 +7,18 @@ import tempfile
 from subprocess import CompletedProcess
 from unittest.mock import patch
 from prepare_update_release import (
-    JOBS, TARGETS, minimum_sdk, release_body, release_changes, sha,
+    JOBS, TARGETS, minimum_sdk, notes_for_app, release_body, release_changes, sha,
     validate_run, verify_uploaded,
 )
 
 
 class UpdateReleaseTest(unittest.TestCase):
+    def test_versioned_notes_can_target_main_and_tv(self):
+        notes = '## 共通\n修复播放器\n\n## 主应用\n修复提醒\n\n## TV\n修复焦点'
+        self.assertEqual(notes_for_app(notes, 'main'), '共通\n修复播放器\n\n主应用\n修复提醒')
+        self.assertEqual(notes_for_app(notes, 'tv'), '共通\n修复播放器\n\nTV\n修复焦点')
+        self.assertEqual(notes_for_app('旧版说明', 'tv'), '旧版说明')
+
     def test_prefers_reviewed_notes_for_exact_version_and_falls_back_to_history(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -81,7 +81,7 @@ class LiveCheckRunner {
       state['deferred'] = deferred;
       final history = List<dynamic>.from(state['history'] as List? ?? []);
       state['history'] = history;
-      final confirmed = <String>{};
+      final confirmed = <String, int>{};
 
       void trimHistory() {
         final oldest = _now().subtract(const Duration(days: 30));
@@ -223,7 +223,7 @@ class LiveCheckRunner {
               'live': live,
               'lastSuccess': time,
             };
-            confirmed.add(room.id);
+            confirmed[room.id] = revision;
             state['lastCheck'] = time;
             platform['lastSuccess'] = time;
             platform['succeeded'] = (platform['succeeded'] as int) + 1;
@@ -256,8 +256,9 @@ class LiveCheckRunner {
               await recordWithoutAlert();
               return;
             }
-            // Persist this transition before delivery so a restart cannot
-            // replay an alert already handed to Android.
+            // Commit before asking Android to display: a failure before this
+            // commit can be retried. An interruption after it may drop the
+            // alert, but must not replay a possibly displayed notification.
             await flush();
             if (expired()) return;
             final delivery = await store.readConfig();
@@ -306,13 +307,13 @@ class LiveCheckRunner {
                 latest.preferenceFor(room).isSnoozed(now))
               return true;
             if (now.isBefore(until) ||
-                confirmed.isEmpty ||
+                confirmed[id] != latest.credentialRevision(room.siteId) ||
                 expired() ||
                 latest.quietHours?.activeUntil(now) != null)
               return false;
-            if (confirmed.contains(id) &&
-                (statuses[id] as Map?)?['live'] == true)
+            if ((statuses[id] as Map?)?['live'] == true) {
               summary.add(room);
+            }
             return true;
           });
           if (summary.isEmpty ||
@@ -325,6 +326,7 @@ class LiveCheckRunner {
             'time': now.toUtc().toIso8601String(),
           });
           trimHistory();
+          // Use the same commit-before-display contract as a room alert.
           await flush();
           if (expired()) return;
           final delivery = await store.readConfig();
@@ -332,6 +334,8 @@ class LiveCheckRunner {
               .where(
                 (room) =>
                     delivery.contains(room) &&
+                    confirmed[room.id] ==
+                        delivery.credentialRevision(room.siteId) &&
                     !delivery.preferenceFor(room).isSnoozed(_now()),
               )
               .length;

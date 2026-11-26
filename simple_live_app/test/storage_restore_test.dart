@@ -162,6 +162,45 @@ void main() {
     },
   );
 
+  test('a stale pending change preserves the last usable rollback', () async {
+    const key = LocalStorageService.kThemeMode;
+    const shield = 'current';
+    await storage.setValue(key, 2);
+    await storage.updateShieldRules([shield], replace: true);
+    String hash(Object value) =>
+        sha256.convert(utf8.encode(jsonEncode(value))).toString();
+    final journal = await Hive.openBox<dynamic>('WebDavRestore');
+    await journal.put('rollback', {
+      'current': {
+        'shield': {
+          'before': ['old'],
+          'after': hash([shield]),
+        },
+      },
+      'pending': {
+        'settings': {
+          'before': {key: 0},
+          'after': hash({key: 1}),
+        },
+      },
+    });
+    await journal.flush();
+    final restore = WebDavRestore();
+    final preview = await restore.preview(
+      WebDavBackup.read(
+        Archive()..addFile(document(WebDavBackup.settingsFile, {key: 2})),
+      ),
+    );
+    final unchanged = preview.change(RestoreGroup.settings, RestoreMode.merge);
+    expect(unchanged.changed, isFalse);
+    final result = await restore.apply([unchanged]);
+    expect(result.unchanged, ['设置']);
+    expect(result.skipped, isEmpty);
+    expect((await restore.rollback()).succeeded, ['屏蔽词']);
+    expect(storage.shieldBox.values, ['old']);
+    expect(storage.getValue(key, 0), 2);
+  });
+
   test(
     'bad settings are rejected before any backup category is written',
     () async {

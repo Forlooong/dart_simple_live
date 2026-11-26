@@ -170,8 +170,10 @@ class RemoteSyncRoomController extends BaseController {
             title: '接收哔哩哔哩账号',
           ))
         return;
-      await BiliBiliAccountService.instance.setCookie(cookie);
-      await BiliBiliAccountService.instance.loadUserInfo();
+      if (!await BiliBiliAccountService.instance.importVerifiedCookie(cookie)) {
+        SmartDialog.showToast('会话验证失败或已切换账号');
+        return;
+      }
       SmartDialog.showToast('已同步哔哩哔哩账号');
     } catch (e) {
       SmartDialog.showToast("同步失败，请重试");

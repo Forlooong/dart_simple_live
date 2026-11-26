@@ -23,6 +23,7 @@ class RemoteSyncWebDAVController extends BaseController {
   // ui
   var passwordVisible = true.obs;
   bool _busy = false;
+  int _sessionGeneration = 0;
 
   late DAVClient davClient;
   var user = "--".obs;
@@ -38,26 +39,12 @@ class RemoteSyncWebDAVController extends BaseController {
   // webDAV 逻辑
   // 初始化webDAV
   void doWebDAVInit() {
-    var uri = LocalStorageService.instance.getValue(
-      LocalStorageService.kWebDAVUri,
-      "",
-    );
-    if (uri.isEmpty) {
+    final session = LocalStorageService.instance.webDavSession;
+    if (session == null) {
       notLogin.value = true;
     } else {
-      user.value = LocalStorageService.instance.getValue(
-        LocalStorageService.kWebDAVUser,
-        "",
-      );
-      var password = LocalStorageService.instance.getValue(
-        LocalStorageService.kWebDAVPassword,
-        "",
-      );
-      final target = Uri.tryParse(uri);
-      final confirmed = LocalStorageService.instance.getValue(
-        LocalStorageService.kWebDAVConfirmedTarget,
-        '',
-      );
+      final target = Uri.tryParse(session.uri);
+      final confirmed = session.confirmed;
       if (target == null ||
           !_validTarget(target) ||
           ((target.scheme == 'http' || confirmed.isNotEmpty) &&
@@ -65,7 +52,8 @@ class RemoteSyncWebDAVController extends BaseController {
         notLogin.value = true;
         return;
       }
-      davClient = DAVClient(uri, user.value, password);
+      user.value = session.user;
+      davClient = DAVClient(session.uri, session.user, session.password);
       // 从未同步过默认为最新数据
       lastRecoverTime.value = Utils.parseTime(
         DateTime.fromMillisecondsSinceEpoch(
@@ -89,13 +77,10 @@ class RemoteSyncWebDAVController extends BaseController {
 
   // 检查webDAV登录状态
   Future<void> checkIsLogin() async {
-    try {
-      // 返回登录结果
-      bool value = await davClient.pingCompleter.future;
-      notLogin.value = !value;
-    } catch (_, stack) {
-      Log.e("WebDAV 连接失败", stack);
-      notLogin.value = true;
+    final generation = _sessionGeneration;
+    final connected = await davClient.pingCompleter.future;
+    if (!isClosed && generation == _sessionGeneration) {
+      notLogin.value = !connected;
     }
   }
 
@@ -112,73 +97,67 @@ class RemoteSyncWebDAVController extends BaseController {
     String webDAVUser,
     String webDAVPassword,
   ) async {
-    final uri = Uri.tryParse(webDAVUri.trim());
-    if (uri == null || !_validTarget(uri)) {
-      SmartDialog.showToast('请输入有效的 WebDAV 地址');
-      return;
-    }
-    final stored = LocalStorageService.instance.getValue(
-      LocalStorageService.kWebDAVUri,
-      '',
-    );
-    if (stored != uri.toString() || uri.scheme == 'http') {
-      final message = uri.scheme == 'http'
-          ? '将通过未加密的 HTTP 向 ${uri.origin} 发送 WebDAV 登录凭据。'
-          : '将向 ${uri.origin} 发送 WebDAV 登录凭据。';
-      if (!await Utils.showAlertDialog(message, title: '确认 WebDAV 服务')) return;
-    }
-    webDAVUri = uri.toString();
-    // 确认登录
-    davClient = DAVClient(webDAVUri, webDAVUser, webDAVPassword);
-    await checkIsLogin();
-    if (!notLogin.value) {
-      // 保存到本地
-      await LocalStorageService.instance.setValue(
-        LocalStorageService.kWebDAVUri,
-        webDAVUri,
+    if (_busy) return;
+    _busy = true;
+    try {
+      final uri = Uri.tryParse(webDAVUri.trim());
+      if (uri == null || !_validTarget(uri)) {
+        SmartDialog.showToast('请输入有效的 WebDAV 地址');
+        return;
+      }
+      final storage = LocalStorageService.instance;
+      final target = uri.toString();
+      if (storage.webDavSession?.uri != target || uri.scheme == 'http') {
+        final message = uri.scheme == 'http'
+            ? '将通过未加密的 HTTP 向 ' + uri.origin + ' 发送 WebDAV 登录凭据。'
+            : '将向 ' + uri.origin + ' 发送 WebDAV 登录凭据。';
+        if (!await Utils.showAlertDialog(message, title: '确认 WebDAV 服务'))
+          return;
+      }
+      final candidate = DAVClient(target, webDAVUser, webDAVPassword);
+      if (!await candidate.pingCompleter.future) {
+        SmartDialog.showToast('WebDAV 账号验证失败，请重试');
+        return;
+      }
+      if (isClosed) return;
+      await storage.saveWebDavSession(
+        uri: target,
+        user: webDAVUser,
+        password: webDAVPassword,
       );
-      await LocalStorageService.instance.setValue(
-        LocalStorageService.kWebDAVUser,
-        webDAVUser,
-      );
-      await LocalStorageService.instance.setValue(
-        LocalStorageService.kWebDAVConfirmedTarget,
-        webDAVUri,
-      );
+      ++_sessionGeneration;
+      davClient = candidate;
       user.value = webDAVUser;
-      await LocalStorageService.instance.setValue(
-        LocalStorageService.kWebDAVPassword,
-        webDAVPassword,
-      );
-      Get.back();
-      SmartDialog.showToast("登录成功！");
-    } else {
-      SmartDialog.showToast("WebDAV账号密码验证失败，请重新输入！");
+      notLogin.value = false;
+      if (!isClosed) {
+        Get.back();
+        SmartDialog.showToast('登录成功！');
+      }
+    } catch (_, stack) {
+      Log.e('WebDAV 会话保存失败', stack);
+      SmartDialog.showToast('WebDAV 会话保存失败');
+    } finally {
+      _busy = false;
     }
   }
 
-  // WebDAV登出
   @override
   Future<void> onLogout() async {
-    var result = await Utils.showAlertDialog("确定要登出WebDAV账号？", title: "退出登录");
-    if (result) {
-      // 清除本地账号数据
-      await LocalStorageService.instance.setValue(
-        LocalStorageService.kWebDAVUri,
-        "",
-      );
-      await LocalStorageService.instance.setValue(
-        LocalStorageService.kWebDAVUser,
-        "",
-      );
-      await LocalStorageService.instance.setValue(
-        LocalStorageService.kWebDAVPassword,
-        "",
-      );
-      await LocalStorageService.instance.removeValue(
-        LocalStorageService.kWebDAVConfirmedTarget,
-      );
+    if (_busy) return;
+    _busy = true;
+    try {
+      if (!await Utils.showAlertDialog('确定要登出 WebDAV 账号？', title: '退出登录')) {
+        return;
+      }
+      await LocalStorageService.instance.clearWebDavSession();
+      ++_sessionGeneration;
       notLogin.value = true;
+      user.value = '--';
+    } catch (_, stack) {
+      Log.e('WebDAV 会话清除失败', stack);
+      SmartDialog.showToast('退出登录失败');
+    } finally {
+      _busy = false;
     }
   }
 

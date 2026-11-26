@@ -10,6 +10,10 @@ on:
         description: Publish publicly after reviewing source, licenses and artifacts
         type: boolean
         default: false
+      approved_sha:
+        description: Full candidate SHA approved by the maintainer for public release
+        type: string
+        required: false
 permissions:
   contents: read
   actions: read
@@ -70,7 +74,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.prepare.outputs.tag }}
           SOURCE_SHA: ${{ steps.prepare.outputs.sha }}
+          APPROVED_SHA: ${{ inputs.approved_sha }}
         run: |
+          test "$APPROVED_SHA" = "$SOURCE_SHA"
           # Never overwrite or silently replace an existing release/tag.
           if gh release view "$TAG" >/dev/null 2>&1 || git ls-remote --exit-code origin "refs/tags/$TAG" >/dev/null 2>&1; then
             echo 'This version already has a release or tag; refusing replacement.' >&2

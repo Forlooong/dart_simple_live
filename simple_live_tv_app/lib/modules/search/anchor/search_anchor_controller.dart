@@ -13,6 +13,12 @@ class SearchAnchorController extends BasePageController<LiveAnchorItemExt> {
   var site = Sites.allSites[Constant.kBiliBili]!;
 
   @override
+  Duration get pageTimeout => const Duration(seconds: 20);
+
+  bool get showDouyinWebSearch =>
+      siteId.value == Constant.kDouyin && !loadding.value && list.isEmpty;
+
+  @override
   void onInit() {
     scrollController.addListener(scrollListener);
     refreshData();
@@ -33,13 +39,22 @@ class SearchAnchorController extends BasePageController<LiveAnchorItemExt> {
   }
 
   @override
-  Future<List<LiveAnchorItemExt>> getData(int page, int pageSize) async {
-    var result = await site.liveSite.searchAnchors(keyword, page: page);
+  Future<({List<LiveAnchorItemExt> items, bool hasMore})> getPage(
+    int page,
+    int pageSize, {
+    bool retry = false,
+  }) async {
+    final requestedSite = site;
+    final result = await requestedSite.liveSite.searchAnchors(
+      keyword,
+      page: page,
+    );
 
-    return result.items
+    final items = result.items
         .map(
           (e) => LiveAnchorItemExt(
             roomId: e.roomId,
+            site: requestedSite,
             profile: e.profile,
             accountId: e.accountId,
             avatar: e.avatar,
@@ -50,6 +65,7 @@ class SearchAnchorController extends BasePageController<LiveAnchorItemExt> {
           ),
         )
         .toList();
+    return (items: items, hasMore: result.hasMore);
   }
 
   @override
@@ -62,6 +78,7 @@ class SearchAnchorController extends BasePageController<LiveAnchorItemExt> {
 class LiveAnchorItemExt extends LiveAnchorItem {
   LiveAnchorItemExt({
     required super.roomId,
+    required this.site,
     required super.avatar,
     required super.liveStatus,
     required super.userName,
@@ -71,5 +88,6 @@ class LiveAnchorItemExt extends LiveAnchorItem {
     super.roomTitle,
   });
 
+  final Site site;
   AppFocusNode focusNode = AppFocusNode();
 }

@@ -418,8 +418,9 @@ class SyncService extends GetxService {
           )) {
         return toJsonResponse({'status': false, 'message': 'account declined'});
       }
-      await BiliBiliAccountService.instance.setCookie(cookie);
-      BiliBiliAccountService.instance.loadUserInfo();
+      if (!await BiliBiliAccountService.instance.importVerifiedCookie(cookie)) {
+        return toJsonResponse({'status': false, 'message': '接收端未接受账号'});
+      }
       SmartDialog.showToast('已同步哔哩哔哩账号');
       return toJsonResponse({'status': true, 'message': 'success'});
     } catch (e) {

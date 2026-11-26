@@ -104,11 +104,39 @@ void main() {
     },
   );
 
+  test(
+    'a verified import with a failing vault preserves the old session',
+    () async {
+      await account.setCookie('existing');
+      final imported = account.importVerifiedCookie('candidate');
+      await requested();
+      storage.fail = true;
+      final assertion = expectLater(imported, throwsStateError);
+      adapter.complete(0);
+      await assertion;
+      expect(account.cookie, 'existing');
+      expect(storage.saved, 'existing');
+      expect(site.cookie, 'existing');
+    },
+  );
+
+  test('an explicit login supersedes a pending verified import', () async {
+    await account.setCookie('existing');
+    final imported = account.importVerifiedCookie('candidate');
+    await requested();
+    await account.setCookie('new');
+    adapter.complete(0);
+    expect(await imported, isFalse);
+    expect(account.cookie, 'new');
+    expect(storage.saved, 'new');
+    expect(site.cookie, 'new');
+  });
+
   testWidgets('rejecting an incoming room account leaves the vault untouched', (
     tester,
   ) async {
     Get.put(account);
-    await account.setCookie('existing');
+    await tester.runAsync(() => account.setCookie('existing'));
     await tester.pumpWidget(const GetMaterialApp(home: Scaffold()));
     final controller = RemoteSyncRoomController('test-room');
     controller.onReceiveBiliAccount(true, '{"cookie":"incoming"}');

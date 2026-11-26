@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:async';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -339,10 +340,67 @@ class LocalStorageService extends GetxService {
     await settingsBox.flush();
   }
 
+  static const _webDavSession = 'WebDAVSession';
+
+  ({String uri, String user, String password, String confirmed})?
+  get webDavSession {
+    final saved = _credentials[_webDavSession];
+    if (saved != null) {
+      // Only an absent record reads legacy keys. An empty record is logout.
+      if (saved.isEmpty) return null;
+      try {
+        final data = jsonDecode(saved) as Map;
+        return (
+          uri: data['uri'] as String,
+          user: data['user'] as String,
+          password: data['password'] as String,
+          confirmed: data['uri'] as String,
+        );
+      } on FormatException {
+        return null;
+      } on TypeError {
+        return null;
+      }
+    }
+    final uri = getValue(kWebDAVUri, '');
+    return uri.isEmpty
+        ? null
+        : (
+            uri: uri,
+            user: getValue(kWebDAVUser, ''),
+            password: getValue(kWebDAVPassword, ''),
+            confirmed: getValue(kWebDAVConfirmedTarget, ''),
+          );
+  }
+
+  Future<void> saveWebDavSession({
+    required String uri,
+    required String user,
+    required String password,
+  }) async {
+    await _updateWebDavSession(
+      jsonEncode({'uri': uri, 'user': user, 'password': password}),
+    );
+  }
+
+  Future<void> clearWebDavSession() => _updateWebDavSession('');
+
+  Future<void> _updateWebDavSession(String value) async {
+    await setValue(_webDavSession, value);
+    if ((_credentials[kWebDAVPassword] ?? '').isNotEmpty) {
+      try {
+        await setValue(kWebDAVPassword, '');
+      } catch (_) {
+        Log.w('WebDAV 旧密码清理失败');
+      }
+    }
+  }
+
   static const credentialKeys = <String>{
     kBilibiliCookie,
     kDouyinCookie,
     kWebDAVPassword,
+    _webDavSession,
   };
   static const secureStorage = FlutterSecureStorage(
     aOptions: AndroidOptions(encryptedSharedPreferences: true),

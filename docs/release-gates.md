@@ -35,6 +35,12 @@ including arm32, use the stricter 16 KiB ZIP offset policy matching `zipalign -P
 Compressed shared objects still receive the ELF checks. This is an APK check, not
 an AAB verification or substitute for runtime tests.
 
+## 候选净变更与运行验收
+
+- 审核整合基线到候选完整 SHA 的净变更，逐项关联改动依据、有效调用链、数据或兼容影响和验证结果。检查被替代路径已清理、原有功能与发布门禁得到保留。
+- 在成功的主线安装包运行后，手动运行 Candidate runtime checks，提供该运行号、用于覆盖安装的公开旧版标签和 Windows 探针所用的公开直播间。工作流复用发布准备的来源、签名和摘要校验。记录安装包启动检查、同 SHA Release 探针和实际使用场景的结果。
+- 生成发布审阅材料，以同一候选 SHA、安装包运行号和审阅材料取得维护者明确批准后公开发布。受环境限制的适用检查保留为待验证项。源代码、包或审阅对象变化后重新取得对应证据和批准。
+
 ## Signing and data preservation
 
 Historical `TestSigned` builds used optimized release code signed by an ephemeral test key.

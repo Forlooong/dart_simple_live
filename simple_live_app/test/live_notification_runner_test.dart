@@ -33,6 +33,7 @@ class _MemoryStore implements NotificationStore {
   NotificationConfig config;
   Map<String, dynamic> _state = {};
   Future<void> Function()? afterWrite;
+  Future<void> Function()? beforeWrite;
   Future<void> Function()? beforeReadConfig;
   int writes = 0;
 
@@ -47,6 +48,7 @@ class _MemoryStore implements NotificationStore {
 
   @override
   Future<void> writeState(Map<String, dynamic> state) async {
+    await beforeWrite?.call();
     writes++;
     _state = _copy(state);
     await afterWrite?.call();
@@ -189,6 +191,74 @@ void main() {
       await poll();
       expect(sent, isEmpty);
       expect(summaries, [1]);
+    });
+
+    test(
+      'an unconfirmed room survives a partial quiet-hours summary',
+      () async {
+        final first = _room('first', site: 'bilibili');
+        final second = _room('second', site: 'huya');
+        final store = _MemoryStore([first, second]);
+        store.config = NotificationConfig(
+          rooms: [first, second],
+          quietHours: const QuietHours(23 * 60, 7 * 60, summary: true),
+        );
+        final summaries = <int>[];
+        var now = DateTime(2026, 1, 3, 1);
+        var live = false;
+        var fail = false;
+        Future<void> poll() => LiveCheckRunner(
+          store: store,
+          check: (room) async {
+            if (fail && room.id == second.id) throw const FormatException();
+            return live;
+          },
+          show: (_) async => throw StateError('expected a summary'),
+          cancel: (_) async {},
+          showSummary: (count) async => summaries.add(count),
+          platformSpacing: Duration.zero,
+          now: () => now,
+        ).run();
+        await poll();
+        live = true;
+        await poll();
+        now = DateTime(2026, 1, 3, 8);
+        fail = true;
+        await poll();
+        expect(summaries, [1]);
+        expect((await store.readState())['deferred'], contains(second.id));
+        fail = false;
+        await poll();
+        await poll();
+        expect(summaries, [1, 1]);
+      },
+    );
+
+    test('only a failure before the durable alert commit can be retried', () async {
+      final room = _room('room');
+      final shown = <String>[];
+      final store = _MemoryStore([room]);
+      var live = false;
+      Future<void> poll() => _runner(
+        store, check: (_) async => live, shown: shown,
+      ).run();
+      await poll();
+      live = true;
+      store.beforeWrite = () async => throw StateError('before commit');
+      await expectLater(poll(), throwsStateError);
+      expect(shown, isEmpty);
+      store.beforeWrite = null;
+      await poll();
+      expect(shown, [room.id]);
+
+      live = false;
+      await poll();
+      live = true;
+      store.afterWrite = () async => throw StateError('after commit');
+      await expectLater(poll(), throwsStateError);
+      store.afterWrite = null;
+      await poll();
+      expect(shown, [room.id]);
     });
 
     test('100-room simulation improves serial polling and state writes', () async {

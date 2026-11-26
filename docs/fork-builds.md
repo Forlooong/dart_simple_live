@@ -18,8 +18,12 @@ is never overwritten; failed uploads leave a draft for investigation.
 
 For reviewed in-app update details, add UTF-8 plain text to
 `docs/release-notes/<release-tag>.txt` in the commit used to build the installers.
-The publisher uses that text for the main app, TV and the GitHub release page.
-Versions without a matching file use the commit titles from the release range.
+The optional headings ## 共通, ## 主应用 and ## TV keep device-specific details
+in each application manifest while retaining all details in the release body.
+Legacy unsectioned notes still apply to both apps. Commit titles from the release
+range can seed the review when the file is missing. For public release, use
+publish: true and enter the full candidate SHA in approved_sha after verifying
+the candidate runtime checks and the review artifact.
 
 If master has advanced beyond the built commit, keep a branch pointing directly
 to that exact source SHA before publishing (for example, `codex/release-<version>`).
