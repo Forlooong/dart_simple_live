@@ -1,0 +1,140 @@
+name: Frozen Android and Linux runtime follow-up
+on:
+  push:
+    branches: [codex/simple-live-verify-e733362]
+    paths: [.github/workflows/retry-runtime-e733362.yml]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: system-images;android-35;google_apis;x86_64
+            pages: 4096
+            app: main
+            label: Android
+          - image: system-images;android-36;google-tv-ps16k;x86_64
+            pages: 16384
+            app: tv
+            label: Android-TV
+    env:
+      APP: ${{ matrix.app }}
+      IMAGE: ${{ matrix.image }}
+      PAGE_SIZE: ${{ matrix.pages }}
+      LABEL: ${{ matrix.label }}
+      PREVIOUS_TAG: 'fork-main-1.12.37-build11138-tv-1.7.27-build10632'
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: verified-runtime-inputs
+          github-token: ${{ github.token }}
+          run-id: 45769010948
+          repository: Forlooong/dart_simple_live
+          path: ${{ runner.temp }}/candidate
+      - name: Start disposable emulator and check page size
+        run: |
+          test -e /dev/kvm
+          sudo chmod a+rw /dev/kvm
+          manager=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | sort -V | tail -1)
+          test -x "$manager"
+          export PATH="$ANDROID_HOME/platform-tools:$(dirname "$manager"):$PATH"
+          printf '%s\n' "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          yes | "$manager" --licenses >/dev/null || test "${PIPESTATUS[1]}" = 0
+          for attempt in 1 2 3; do
+            if "$manager" --channel=3 --install emulator "$IMAGE"; then break; fi
+            test "$attempt" -lt 3
+          done
+          printf 'no\n' | avdmanager create avd --name release_smoke --package "$IMAGE" --force
+          nohup "$ANDROID_HOME/emulator/emulator" -avd release_smoke -no-window -no-snapshot \
+            -noaudio -no-boot-anim -gpu swiftshader_indirect -memory 3072 > "$RUNNER_TEMP/emulator.log" 2>&1 </dev/null &
+          timeout 240 bash -c 'adb wait-for-device; until [[ $(adb shell getprop sys.boot_completed | tr -d "\r") = 1 ]]; do sleep 3; done'
+          test "$(adb shell getconf PAGE_SIZE | tr -d '\r')" = "$PAGE_SIZE"
+      - name: Verify exact package, upgrade in place and cold launch
+        run: |
+          cd "$RUNNER_TEMP/candidate"
+          jq -e '.sourceSha == "e733362d4052aaae5ea9f5003bf10aff659ca204"' update.json >/dev/null
+          package=$(jq -r --arg app "$APP" '.[$app].packages[] | select(.platform == "android" and .arch == "x64") | .packageId' update.json)
+          version=$(jq -r --arg app "$APP" '.[$app].version' update.json)
+          url=$(jq -r --arg app "$APP" '.[$app].packages[] | select(.platform == "android" and .arch == "x64") | .url' update.json)
+          apk=${url##*/}
+          digest=$(jq -r --arg app "$APP" '.[$app].packages[] | select(.platform == "android" and .arch == "x64") | .sha256' update.json)
+          printf '%s  %s\n' "$digest" "$apk" | sha256sum -c -
+          gh release download "$PREVIOUS_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern "*-$LABEL-x64-ReleaseSigned.apk" --output previous.apk
+          adb install previous.apk
+          adb shell am start -W -n "$package/.MainActivity" | grep -F 'Status: ok'
+          adb shell am force-stop "$package"
+          if [[ "$APP" == main ]]; then
+            for try in 1 2 3 4 5; do
+              timeout 15 adb wait-for-device
+              if [[ "$(adb shell id -u | tr -d '\r')" == 0 ]]; then break; fi
+              timeout 15 adb root || true
+              sleep 3
+            done
+            [[ "$(adb shell id -u | tr -d '\r')" == 0 ]]
+            app_data="/data/user/0/$package"
+            app_uid=$(adb shell stat -c '%u' "$app_data" | tr -d '\r')
+            [[ "$app_uid" =~ ^[1-9][0-9]+$ ]]
+            sentinel=$(python -c 'import secrets; print(secrets.token_hex(16))')
+            adb shell "mkdir -p '$app_data/files' && chown '$app_uid' '$app_data/files' && printf '%s' '$sentinel' > '$app_data/files/.candidate-upgrade-sentinel' && chown '$app_uid' '$app_data/files/.candidate-upgrade-sentinel'"
+          fi
+          adb install -r "$apk"
+          if [[ "$APP" == main ]]; then
+            test "$(adb shell cat "$app_data/files/.candidate-upgrade-sentinel" | tr -d '\r')" = "$sentinel"
+            test "$(adb shell stat -c '%u' "$app_data" | tr -d '\r')" = "$app_uid"
+            echo 'Verified Android private-data sentinel and directory ownership.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'PENDING: TV uses a production system image without adb root. Verify persisted TV data via application UI.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          adb shell dumpsys package "$package" | tr -d '\r' | grep -F "versionName=$version"
+          adb shell am force-stop "$package"
+          adb logcat -b crash -c
+          adb shell am start -W -n "$package/.MainActivity" | grep -F 'Status: ok'
+          sleep 12
+          adb shell pidof "$package"
+          adb logcat -b crash -d > "$RUNNER_TEMP/crash-summary.txt"
+          if grep -F "Process: $package" "$RUNNER_TEMP/crash-summary.txt"; then exit 1; fi
+          echo "Verified launch and in-place upgrade at $PAGE_SIZE-byte pages." >> "$GITHUB_STEP_SUMMARY"
+
+  linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: verified-runtime-inputs
+          github-token: ${{ github.token }}
+          run-id: 45769010948
+          repository: Forlooong/dart_simple_live
+          path: ${{ runner.temp }}/candidate
+      - name: Verify DEB, install and launch
+        run: |
+          cd "$RUNNER_TEMP/candidate"
+          jq -e '.sourceSha == "e733362d4052aaae5ea9f5003bf10aff659ca204"' update.json >/dev/null
+          url=$(jq -r '.main.packages[] | select(.platform == "linux") | .url' update.json)
+          deb=${url##*/}
+          digest=$(jq -r '.main.packages[] | select(.platform == "linux") | .sha256' update.json)
+          printf '%s  %s\n' "$digest" "$deb" | sha256sum -c -
+          sudo apt-get update
+          sudo apt-get install -y xvfb "./$deb"
+          LD_LIBRARY_PATH=/opt/simple-live/lib ldd /opt/simple-live/simple_live_app > "$RUNNER_TEMP/linked-libraries.txt"
+          if grep -F 'not found' "$RUNNER_TEMP/linked-libraries.txt"; then exit 1; fi
+          sudo apt-get install -y libgles2
+          result=0
+          timeout 10s xvfb-run -a simple-live || result=$?
+          test "$result" -eq 124
+          echo 'Same DEB launched after provisioning libgles2. Clean-install failure remains unclosed.' >> "$GITHUB_STEP_SUMMARY"
